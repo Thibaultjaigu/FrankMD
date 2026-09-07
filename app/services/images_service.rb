@@ -92,11 +92,7 @@ class ImagesService
 
       cfg = Config.new
       region = UploadStorage.s3_region
-      client = Aws::S3::Client.new(
-        access_key_id: cfg.get("aws_access_key_id"),
-        secret_access_key: cfg.get("aws_secret_access_key"),
-        region: region
-      )
+      client = UploadStorage.s3_client(cfg)
 
       # Process image if resize ratio provided
       if resize
@@ -248,11 +244,7 @@ class ImagesService
       bucket = cfg.get("aws_s3_bucket")
       region = UploadStorage.s3_region
 
-      client = Aws::S3::Client.new(
-        access_key_id: cfg.get("aws_access_key_id"),
-        secret_access_key: cfg.get("aws_secret_access_key"),
-        region: region
-      )
+      client = UploadStorage.s3_client(cfg)
 
       key = UploadStorage.s3_key(original_name, custom_prefix: custom_prefix)
 
@@ -519,11 +511,7 @@ class ImagesService
       bucket = cfg.get("aws_s3_bucket")
       region = UploadStorage.s3_region
 
-      client = Aws::S3::Client.new(
-        access_key_id: cfg.get("aws_access_key_id"),
-        secret_access_key: cfg.get("aws_secret_access_key"),
-        region: region
-      )
+      client = UploadStorage.s3_client(cfg)
 
       # Process image if resize ratio provided
       if resize

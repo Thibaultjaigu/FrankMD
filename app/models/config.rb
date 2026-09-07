@@ -34,6 +34,11 @@ class Config
     "aws_secret_access_key" => { default: nil, type: :string, env: "AWS_SECRET_ACCESS_KEY" },
     "aws_s3_bucket" => { default: nil, type: :string, env: "AWS_S3_BUCKET" },
     "aws_region" => { default: nil, type: :string, env: "AWS_REGION" },
+    # Custom S3-compatible endpoint (MinIO, SeaweedFS, ...). When set, uploads
+    # go to this endpoint instead of AWS. force_path_style is what most
+    # self-hosted services need (bucket in the path, not the hostname).
+    "aws_s3_endpoint" => { default: nil, type: :string, env: "AWS_S3_ENDPOINT" },
+    "aws_s3_force_path_style" => { default: false, type: :boolean, env: "AWS_S3_FORCE_PATH_STYLE" },
 
     # YouTube API (ENV default)
     "youtube_api_key" => { default: nil, type: :string, env: "YOUTUBE_API_KEY" },
@@ -182,7 +187,12 @@ class Config
         "# aws_access_key_id = your-access-key",
         "# aws_secret_access_key = your-secret-key",
         "# aws_s3_bucket = your-bucket-name",
-        "# aws_region = us-east-1"
+        "# aws_region = us-east-1",
+        "",
+        "# S3-compatible services (MinIO, SeaweedFS, ...): set a custom endpoint",
+        "# and force path-style URLs (bucket in the path).",
+        "# aws_s3_endpoint = http://localhost:9000",
+        "# aws_s3_force_path_style = true"
       ]
     },
     {

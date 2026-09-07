@@ -60,11 +60,7 @@ class MediaService
       bucket = cfg.get("aws_s3_bucket")
       region = UploadStorage.s3_region
 
-      client = Aws::S3::Client.new(
-        access_key_id: cfg.get("aws_access_key_id"),
-        secret_access_key: cfg.get("aws_secret_access_key"),
-        region: region
-      )
+      client = UploadStorage.s3_client(cfg)
 
       key = UploadStorage.s3_key(original_filename, custom_prefix: custom_prefix)
       content_type = VIDEO_MIME_TYPES[File.extname(key).downcase] || "application/octet-stream"

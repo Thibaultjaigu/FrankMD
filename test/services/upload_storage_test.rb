@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "aws-sdk-s3"
 
 class UploadStorageTest < ActiveSupport::TestCase
   Uploaded = Struct.new(:original_filename, :size, :read_body, keyword_init: true) do
@@ -124,6 +125,65 @@ class UploadStorageTest < ActiveSupport::TestCase
   test "s3_key falls back to the default when a custom value sanitizes to empty" do
     assert_match %r{\Afrankmd/\d{4}/\d{2}/photo-[0-9a-f]{16}\.png\z}, UploadStorage.s3_key("photo.png", custom_key: "../..")
     assert_match %r{\Afrankmd/\d{4}/\d{2}/photo-[0-9a-f]{16}\.png\z}, UploadStorage.s3_key("photo.png", custom_prefix: "///")
+  end
+
+  # === s3_client (custom endpoint / MinIO) ===
+
+  test "s3_client passes a custom endpoint and force_path_style when configured" do
+    cfg = stub("cfg")
+    cfg.stubs(:get).returns(nil)
+    cfg.stubs(:get).with("aws_region").returns("us-east-1")
+    cfg.stubs(:get).with("aws_s3_endpoint").returns("http://localhost:9000")
+    cfg.stubs(:get).with("aws_s3_force_path_style").returns(true)
+
+    captured = nil
+    Aws::S3::Client.stubs(:new).with { |opts| captured = opts; true }.returns(:client)
+
+    UploadStorage.s3_client(cfg)
+    assert_equal "http://localhost:9000", captured[:endpoint]
+    assert_equal true, captured[:force_path_style]
+    assert_equal "us-east-1", captured[:region]
+  end
+
+  test "s3_client omits endpoint/force_path_style for plain AWS" do
+    cfg = stub("cfg")
+    cfg.stubs(:get).returns(nil)
+
+    captured = nil
+    Aws::S3::Client.stubs(:new).with { |opts| captured = opts; true }.returns(:client)
+
+    UploadStorage.s3_client(cfg)
+    assert_nil captured[:endpoint]
+    refute captured.key?(:force_path_style)
+    assert_equal "us-east-1", captured[:region] # DEFAULT_S3_REGION
+  end
+
+  # === s3_url ===
+
+  test "s3_url builds the AWS virtual-host URL by default" do
+    url = UploadStorage.s3_url("mybucket", "us-west-2", "frankmd/2026/09/a b.png")
+    assert_equal "https://mybucket.s3.us-west-2.amazonaws.com/frankmd/2026/09/a%20b.png", url
+  end
+
+  test "s3_url uses path-style against a custom endpoint" do
+    @config_stub.stubs(:get).with("aws_s3_endpoint").returns("http://localhost:9000/")
+    @config_stub.stubs(:get).with("aws_s3_force_path_style").returns(true)
+    assert_equal "http://localhost:9000/mybucket/frankmd/x.png",
+      UploadStorage.s3_url("mybucket", "us-east-1", "frankmd/x.png")
+  end
+
+  test "s3_url uses virtual-host style against a custom endpoint when path-style is off" do
+    @config_stub.stubs(:get).with("aws_s3_endpoint").returns("https://s3.example.com")
+    @config_stub.stubs(:get).with("aws_s3_force_path_style").returns(false)
+    assert_equal "https://mybucket.s3.example.com/k.png",
+      UploadStorage.s3_url("mybucket", "us-east-1", "k.png")
+  end
+
+  test "s3_url keeps a non-default port for a custom endpoint" do
+    @config_stub.stubs(:get).with("aws_s3_endpoint").returns("http://minio.local:9000")
+    @config_stub.stubs(:get).with("aws_s3_force_path_style").returns(false)
+    assert_equal "http://b.minio.local:9000/k.png",
+      UploadStorage.s3_url("b", "us-east-1", "k.png")
   end
 
   # === with_temp_copy ===

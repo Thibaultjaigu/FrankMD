@@ -114,6 +114,27 @@ module UploadStorage
     Config.new.get("aws_region").presence || DEFAULT_S3_REGION
   end
 
+  # Single source of truth for the S3 client. Adds a custom endpoint +
+  # path-style addressing when configured (MinIO/SeaweedFS/etc.), so the four
+  # upload paths (image, video, external, AI) can't drift apart.
+  def s3_client(cfg = Config.new)
+    require "aws-sdk-s3"
+
+    options = {
+      access_key_id: cfg.get("aws_access_key_id"),
+      secret_access_key: cfg.get("aws_secret_access_key"),
+      region: cfg.get("aws_region").presence || DEFAULT_S3_REGION
+    }
+
+    endpoint = cfg.get("aws_s3_endpoint").presence
+    if endpoint
+      options[:endpoint] = endpoint
+      options[:force_path_style] = cfg.get("aws_s3_force_path_style") ? true : false
+    end
+
+    Aws::S3::Client.new(options)
+  end
+
   # Build the S3 object key for an upload.
   #
   # - custom_key: treated as a sanitized prefix/base and made unique server-side.
@@ -154,6 +175,19 @@ module UploadStorage
 
   def s3_url(bucket, region, key)
     encoded = key.split("/").map { |part| ERB::Util.url_encode(part) }.join("/")
-    "https://#{bucket}.s3.#{region}.amazonaws.com/#{encoded}"
+
+    endpoint = Config.new.get("aws_s3_endpoint").presence
+    return "https://#{bucket}.s3.#{region}.amazonaws.com/#{encoded}" unless endpoint
+
+    base = endpoint.chomp("/")
+    if Config.new.get("aws_s3_force_path_style")
+      # Bucket in the path: http://host:9000/bucket/key (MinIO default).
+      "#{base}/#{bucket}/#{encoded}"
+    else
+      # Virtual-host style against the custom endpoint: scheme://bucket.host[:port]/key
+      uri = URI.parse(base)
+      port = uri.port && ![ uri.default_port ].include?(uri.port) ? ":#{uri.port}" : ""
+      "#{uri.scheme}://#{bucket}.#{uri.host}#{port}/#{encoded}"
+    end
   end
 end
