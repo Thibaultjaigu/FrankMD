@@ -183,6 +183,46 @@ class ImagesServiceTest < ActiveSupport::TestCase
     assert_includes paths, "subfolder/nested.png"
   end
 
+  # === delete ===
+
+  test "delete removes an existing image and returns true" do
+    path = create_test_image("gone.jpg")
+    assert path.exist?
+
+    assert ImagesService.delete("gone.jpg")
+    refute path.exist?
+  end
+
+  test "delete works with subdirectories" do
+    path = create_test_image("photos/old.jpg")
+
+    assert ImagesService.delete("photos/old.jpg")
+    refute path.exist?
+  end
+
+  test "delete returns false for a non-existent image" do
+    refute ImagesService.delete("nope.jpg")
+  end
+
+  test "delete refuses path traversal and leaves the target untouched" do
+    outside = Rails.root.join("tmp", "delete_traversal_#{SecureRandom.hex(4)}.txt")
+    File.write(outside, "keep me")
+    begin
+      relative = outside.relative_path_from(@temp_dir).to_s # ../../delete_traversal_x.txt
+      refute ImagesService.delete(relative)
+      assert outside.exist?, "traversal must not delete files outside the images dir"
+    ensure
+      FileUtils.rm_f(outside)
+    end
+  end
+
+  test "delete refuses non-image files inside the images dir" do
+    path = create_test_image("secret.txt")
+
+    refute ImagesService.delete("secret.txt")
+    assert path.exist?
+  end
+
   # === find_image ===
 
   test "find_image returns full path for existing image" do

@@ -241,6 +241,9 @@ pt-PT:
       prev_page: "Anterior"
       next_page: "Seguinte"
       page_status: "A mostrar %{from}–%{to} de %{total}"
+      delete_image: "Eliminar imagem"
+      delete_confirm: "Eliminar \"%{name}\"? Esta ação não pode ser anulada."
+      delete_failed: "Não foi possível eliminar a imagem."
       # Imagens de pasta
       filesystem_api_required: "API de Acesso ao Sistema de Ficheiros Necessária"
       filesystem_api_description: "Esta funcionalidade requer a API de Acesso ao Sistema de Ficheiros, que pode estar desativada no seu navegador."

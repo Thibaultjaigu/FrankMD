@@ -249,6 +249,9 @@ en:
       prev_page: "Previous"
       next_page: "Next"
       page_status: "Showing %{from}–%{to} of %{total}"
+      delete_image: "Delete image"
+      delete_confirm: "Delete \"%{name}\"? This cannot be undone."
+      delete_failed: "Could not delete the image."
       # Folder images
       filesystem_api_required: "File System Access API Required"
       filesystem_api_description: "This feature requires the File System Access API, which may be disabled in your browser."

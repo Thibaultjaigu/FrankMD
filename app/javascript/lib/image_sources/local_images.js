@@ -1,7 +1,7 @@
 // Local Server Images
 // Handles loading and displaying images from the server's images directory
 
-import { get, post } from "@rails/request.js"
+import { get, post, destroy } from "@rails/request.js"
 import { escapeHtml } from "lib/text_utils"
 import { encodePath } from "lib/url_utils"
 
@@ -40,6 +40,8 @@ export class LocalImageSource {
       return
     }
 
+    const deleteLabel = (typeof window !== "undefined" && window.t) ? window.t("dialogs.image_picker.delete_image") : "Delete"
+
     const html = images.map(image => {
       const width = Number(image.width)
       const height = Number(image.height)
@@ -54,6 +56,19 @@ export class LocalImageSource {
         >
           <img src="/images/preview/${encodePath(image.path)}" alt="${escapeHtml(image.name)}" loading="lazy">
           ${dimensions ? `<div class="image-dimensions">${dimensions}</div>` : ''}
+          <button
+            type="button"
+            class="image-grid-delete"
+            data-action="click->local-images#deleteImage"
+            data-path="${escapeHtml(image.path)}"
+            data-name="${escapeHtml(image.name)}"
+            title="${escapeHtml(deleteLabel)}"
+            aria-label="${escapeHtml(deleteLabel)}"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" width="16" height="16">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.02-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+            </svg>
+          </button>
         </div>
       `
     }).join("")
@@ -67,6 +82,17 @@ export class LocalImageSource {
         el.classList.remove("selected")
       })
     }
+  }
+
+  async deleteImage(path) {
+    const response = await destroy(`/images/file/${encodePath(path)}`, { responseKind: "json" })
+
+    if (!response.ok) {
+      const data = await response.json
+      throw new Error(data.error || "Failed to delete image")
+    }
+
+    return await response.json
   }
 
   async uploadToS3(path, resize, s3Key = "") {

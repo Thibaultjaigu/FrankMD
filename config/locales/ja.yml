@@ -241,6 +241,9 @@ ja:
       prev_page: "前へ"
       next_page: "次へ"
       page_status: "%{total}件中 %{from}–%{to}件を表示"
+      delete_image: "画像を削除"
+      delete_confirm: "「%{name}」を削除しますか？この操作は元に戻せません。"
+      delete_failed: "画像を削除できませんでした。"
       # Folder images
       filesystem_api_required: "File System Access APIが必要です"
       filesystem_api_description: "この機能にはFile System Access APIが必要ですが、ブラウザで無効になっている可能性があります。"

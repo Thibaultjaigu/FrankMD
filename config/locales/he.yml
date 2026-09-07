@@ -238,6 +238,9 @@ he:
       prev_page: "הקודם"
       next_page: "הבא"
       page_status: "מציג %{from}–%{to} מתוך %{total}"
+      delete_image: "מחק תמונה"
+      delete_confirm: "למחוק את \"%{name}\"? לא ניתן לבטל פעולה זו."
+      delete_failed: "לא ניתן היה למחוק את התמונה."
       # תמונות מתיקייה
       filesystem_api_required: "נדרש API לגישה למערכת קבצים"
       filesystem_api_description: "תכונה זו דורשת את ה-File System Access API, שעשוי להיות מושבת בדפדפן שלך."

@@ -241,6 +241,9 @@ ko:
       prev_page: "이전"
       next_page: "다음"
       page_status: "%{total}개 중 %{from}–%{to}개 표시"
+      delete_image: "이미지 삭제"
+      delete_confirm: "\"%{name}\"을(를) 삭제할까요? 이 작업은 되돌릴 수 없습니다."
+      delete_failed: "이미지를 삭제할 수 없습니다."
       # 폴더 이미지
       filesystem_api_required: "File System Access API가 필요합니다"
       filesystem_api_description: "이 기능은 File System Access API가 필요하며, 브라우저에서 비활성화되어 있을 수 있습니다."

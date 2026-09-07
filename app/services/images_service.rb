@@ -92,6 +92,21 @@ class ImagesService
       full_path
     end
 
+    # Delete a local image. Reuses find_image, so the path is confined to the
+    # images directory (PathSafety) and must be an existing, allow-listed image
+    # file — a traversal or a non-image path can't delete anything else.
+    # Local files only; S3 objects are out of scope.
+    def delete(path)
+      full_path = find_image(path)
+      return false unless full_path
+
+      full_path.delete
+      true
+    rescue SystemCallError => e
+      Rails.logger.error "Failed to delete image #{path}: #{e.message}"
+      false
+    end
+
     def upload_to_s3(path, resize: nil, custom_key: nil)
       return nil unless s3_enabled?
 

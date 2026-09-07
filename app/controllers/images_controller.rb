@@ -31,6 +31,15 @@ class ImagesController < ApplicationController
     render json: { images: images, total: total, limit: limit, offset: offset }
   end
 
+  # DELETE /images/file/*path
+  def destroy
+    if ImagesService.delete(params[:path])
+      render json: { success: true }
+    else
+      render json: { error: "Image not found or could not be deleted" }, status: :unprocessable_entity
+    end
+  end
+
   # GET /images/preview/*path
   def preview
     path = params[:path]

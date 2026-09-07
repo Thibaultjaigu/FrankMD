@@ -25,6 +25,7 @@ Rails.application.routes.draw do
   get "images/config", to: "images#status"
   get "images", to: "images#index"
   get "images/preview/*path", to: "images#preview", as: :image_preview, format: false
+  delete "images/file/*path", to: "images#destroy", as: :image_file, format: false
   post "images/upload", to: "images#upload"
   post "images/upload_to_s3", to: "images#upload_to_s3"
   post "images/upload_external_to_s3", to: "images#upload_external_to_s3"

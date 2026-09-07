@@ -44,6 +44,33 @@
     pointer-events: none;
   }
 
+  /* Trash button on each thumbnail (#160). Hidden until the tile is hovered or
+     the button is keyboard-focused, so it doesn't clutter the grid. */
+  .image-grid-delete {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.25rem;
+    border-radius: 0.375rem;
+    color: white;
+    background: rgba(0, 0, 0, 0.55);
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s;
+    cursor: pointer;
+  }
+
+  .image-grid-item:hover .image-grid-delete,
+  .image-grid-delete:focus-visible {
+    opacity: 1;
+  }
+
+  .image-grid-delete:hover {
+    background: rgba(220, 38, 38, 0.9);
+  }
+
   .image-grid-empty {
     display: flex;
     align-items: center;

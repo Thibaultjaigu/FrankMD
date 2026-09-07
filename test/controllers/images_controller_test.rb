@@ -185,6 +185,21 @@ class ImagesControllerTest < ActionDispatch::IntegrationTest
       assert_response :not_found
     end
 
+    test "destroy deletes an image and returns success" do
+      path = create_test_image("delete_me.png")
+
+      delete "/images/file/delete_me.png", as: :json
+      assert_response :success
+      assert_equal true, JSON.parse(response.body)["success"]
+      refute path.exist?
+    end
+
+    test "destroy returns 422 for a non-existent image" do
+      delete "/images/file/nope.png", as: :json
+      assert_response :unprocessable_entity
+      assert JSON.parse(response.body)["error"].present?
+    end
+
     test "upload saves file to notes/images directory" do
       # Create a test image file
       png_data = [

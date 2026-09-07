@@ -248,6 +248,9 @@ pt-BR:
       prev_page: "Anterior"
       next_page: "Próxima"
       page_status: "Mostrando %{from}–%{to} de %{total}"
+      delete_image: "Excluir imagem"
+      delete_confirm: "Excluir \"%{name}\"? Esta ação não pode ser desfeita."
+      delete_failed: "Não foi possível excluir a imagem."
       # Imagens de pasta
       filesystem_api_required: "API de Acesso ao Sistema de Arquivos Necessária"
       filesystem_api_description: "Este recurso requer a API de Acesso ao Sistema de Arquivos, que pode estar desabilitada no seu navegador."

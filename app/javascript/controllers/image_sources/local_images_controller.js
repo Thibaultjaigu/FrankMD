@@ -55,6 +55,11 @@ export default class extends Controller {
     const data = await this.source.load(search, { limit: this.perPage, offset: this.offset })
     if (!data.error && this.hasGridTarget) {
       this.total = data.total || 0
+      // Stepped past the end (e.g. deleted the last item on the last page): go back a page.
+      if (this.offset > 0 && this.offset >= this.total) {
+        this.offset = Math.max(0, this.offset - this.perPage)
+        return this.loadImages(search)
+      }
       this.source.renderGrid(data.images, this.gridTarget, "click->local-images#select")
       this.updatePagination()
     }
@@ -94,6 +99,28 @@ export default class extends Controller {
       const from = this.total === 0 ? 0 : this.offset + 1
       const to = Math.min(this.offset + this.perPage, this.total)
       this.pageStatusTarget.textContent = window.t("dialogs.image_picker.page_status", { from, to, total: this.total })
+    }
+  }
+
+  // Delete the image whose trash button was clicked. stopPropagation keeps the
+  // click from also triggering the tile's select action.
+  async deleteImage(event) {
+    event.stopPropagation()
+    const btn = event.currentTarget
+    const path = btn.dataset.path
+    const name = btn.dataset.name
+
+    if (!window.confirm(window.t("dialogs.image_picker.delete_confirm", { name }))) return
+
+    try {
+      await this.source.deleteImage(path)
+      if (this.source.selectedPath === path) {
+        this.source.selectedPath = null
+        this.s3Option?.hide()
+      }
+      await this.loadImages(this.currentSearch())
+    } catch (_e) {
+      window.alert(window.t("dialogs.image_picker.delete_failed"))
     }
   }
 

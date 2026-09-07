@@ -270,4 +270,40 @@ describe("LocalImageSource", () => {
         .rejects.toThrow("Failed to upload to S3")
     })
   })
+
+  describe("deleteImage", () => {
+    it("sends a DELETE to the encoded file path", async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ success: true })
+      })
+
+      const result = await source.deleteImage("photos/cat.jpg")
+
+      expect(global.fetch).toHaveBeenCalledWith("/images/file/photos/cat.jpg", expect.objectContaining({
+        method: "DELETE"
+      }))
+      expect(result.success).toBe(true)
+    })
+
+    it("throws with the server error message on failure", async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        json: () => Promise.resolve({ error: "Image not found or could not be deleted" })
+      })
+
+      await expect(source.deleteImage("gone.jpg"))
+        .rejects.toThrow("Image not found or could not be deleted")
+    })
+
+    it("throws a generic error when the server gives none", async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        json: () => Promise.resolve({})
+      })
+
+      await expect(source.deleteImage("gone.jpg"))
+        .rejects.toThrow("Failed to delete image")
+    })
+  })
 })

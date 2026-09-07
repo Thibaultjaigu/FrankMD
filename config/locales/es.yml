@@ -241,6 +241,9 @@ es:
       prev_page: "Anterior"
       next_page: "Siguiente"
       page_status: "Mostrando %{from}–%{to} de %{total}"
+      delete_image: "Eliminar imagen"
+      delete_confirm: "¿Eliminar \"%{name}\"? Esta acción no se puede deshacer."
+      delete_failed: "No se pudo eliminar la imagen."
       # Folder images
       filesystem_api_required: "Se Requiere API de Acceso al Sistema de Archivos"
       filesystem_api_description: "Esta función requiere la API de Acceso al Sistema de Archivos, que puede estar deshabilitada en tu navegador."
