@@ -327,6 +327,10 @@ aws_secret_access_key = your-secret
 aws_s3_bucket = your-bucket
 aws_region = us-east-1
 
+# S3-compatible services (MinIO, SeaweedFS, ...) — optional
+# aws_s3_endpoint = http://localhost:9000
+# aws_s3_force_path_style = true
+
 # API Keys
 youtube_api_key = your-youtube-key
 google_api_key = your-google-key
@@ -382,6 +386,8 @@ The `.fed` file appears in the explorer panel with a gear icon. You can click it
 | `aws_secret_access_key` | string | - | AWS secret key for S3 |
 | `aws_s3_bucket` | string | - | S3 bucket name |
 | `aws_region` | string | - | AWS region |
+| `aws_s3_endpoint` | string | - | Custom S3-compatible endpoint (MinIO, SeaweedFS, ...); leave unset for AWS |
+| `aws_s3_force_path_style` | boolean | `false` | Use path-style URLs (bucket in the path); required by most self-hosted S3 services |
 | `youtube_api_key` | string | - | YouTube Data API key |
 | `google_api_key` | string | - | Google API key |
 | `google_cse_id` | string | - | Google Custom Search Engine ID |
