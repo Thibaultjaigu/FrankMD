@@ -30,13 +30,16 @@ class ImagesService
       Pathname.new(resolved_images_path).expand_path
     end
 
-    def list(search: nil)
+    def list(search: nil, limit: MAX_RESULTS, offset: 0)
       return [] unless enabled?
       return [] unless images_path.exist?
 
+      limit = clamp_limit(limit)
+      offset = clamp_offset(offset)
+
       files = find_images(search)
         .sort_by { |f| -f.mtime.to_i }  # Most recent first
-        .first(MAX_RESULTS)
+        .slice(offset, limit) || []
 
       files.map do |file|
         relative_path = file.relative_path_from(images_path).to_s
@@ -51,6 +54,13 @@ class ImagesService
           height: dimensions[:height]
         }
       end
+    end
+
+    def count(search: nil)
+      return 0 unless enabled?
+      return 0 unless images_path.exist?
+
+      find_images(search).size
     end
 
     def get_image_dimensions(path)
@@ -274,6 +284,18 @@ class ImagesService
       # Config handles: .fed file > IMAGES_PATH env > default (nil)
       # XDG/Pictures fallbacks are handled by the initializer setting IMAGES_PATH
       Config.new.get("images_path")
+    end
+
+    def clamp_limit(limit)
+      Integer(limit).clamp(1, 100)
+    rescue ArgumentError, TypeError
+      MAX_RESULTS
+    end
+
+    def clamp_offset(offset)
+      [ Integer(offset), 0 ].max
+    rescue ArgumentError, TypeError
+      0
     end
 
     def find_images(search)

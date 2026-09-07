@@ -89,6 +89,68 @@ class ImagesServiceTest < ActiveSupport::TestCase
     assert_equal 10, images.length
   end
 
+  test "list honors offset and limit for paging" do
+    15.times { |i| create_test_image("image_#{i}.jpg") }
+
+    first_page = ImagesService.list(limit: 10, offset: 0)
+    second_page = ImagesService.list(limit: 10, offset: 10)
+
+    assert_equal 10, first_page.length
+    assert_equal 5, second_page.length
+    refute_equal first_page.map { |i| i[:name] }, second_page.map { |i| i[:name] }
+  end
+
+  test "list clamps an oversized limit to 100" do
+    5.times { |i| create_test_image("image_#{i}.jpg") }
+
+    images = ImagesService.list(limit: 1000)
+    assert_equal 5, images.length
+  end
+
+  test "list clamps a negative offset to 0" do
+    img1 = create_test_image("old.jpg")
+    sleep 0.01
+    img2 = create_test_image("new.jpg")
+
+    images = ImagesService.list(offset: -5)
+    assert_equal 2, images.length
+    assert_equal "new.jpg", images[0][:name]
+  end
+
+  test "list coerces garbage limit/offset instead of raising" do
+    create_test_image("image.jpg")
+
+    images = ImagesService.list(limit: "not a number", offset: "also not a number")
+    assert_equal 1, images.length
+  end
+
+  # === count ===
+
+  test "count returns 0 when disabled" do
+    @config_stub.stubs(:get).with("images_path").returns(nil)
+    assert_equal 0, ImagesService.count
+  end
+
+  test "count returns 0 when directory doesn't exist" do
+    FileUtils.rm_rf(@temp_dir)
+    assert_equal 0, ImagesService.count
+  end
+
+  test "count returns the full total regardless of limit" do
+    15.times { |i| create_test_image("image_#{i}.jpg") }
+
+    assert_equal 15, ImagesService.count
+    assert_equal 10, ImagesService.list.length
+  end
+
+  test "count respects search" do
+    create_test_image("cat.jpg")
+    create_test_image("dog.png")
+    create_test_image("category.gif")
+
+    assert_equal 2, ImagesService.count(search: "cat")
+  end
+
   test "list filters by search term" do
     create_test_image("cat.jpg")
     create_test_image("dog.png")

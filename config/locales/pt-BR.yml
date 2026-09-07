@@ -243,6 +243,11 @@ pt-BR:
       local_setup_step_1: "Edite .fed na sua pasta de notas"
       local_setup_step_2: "Adicione: images_path = /caminho/para/imagens"
       search_images_placeholder: "Buscar imagens por nome..."
+      # Paginação
+      per_page: "Por página"
+      prev_page: "Anterior"
+      next_page: "Próxima"
+      page_status: "Mostrando %{from}–%{to} de %{total}"
       # Imagens de pasta
       filesystem_api_required: "API de Acesso ao Sistema de Arquivos Necessária"
       filesystem_api_description: "Este recurso requer a API de Acesso ao Sistema de Arquivos, que pode estar desabilitada no seu navegador."

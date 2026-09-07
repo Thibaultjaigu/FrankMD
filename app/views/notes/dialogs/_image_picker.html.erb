@@ -166,8 +166,41 @@
         </div>
 
         <!-- Image Grid -->
-        <div class="grid grid-cols-5 gap-2 mb-4 min-h-[200px] max-h-[300px] overflow-y-auto" data-local-images-target="grid">
+        <div class="grid grid-cols-5 gap-2 mb-2 min-h-[200px] max-h-[300px] overflow-y-auto" data-local-images-target="grid">
           <!-- Images will be rendered by JavaScript -->
+        </div>
+
+        <!-- Pagination -->
+        <div class="flex items-center justify-between gap-2 mb-4 text-xs text-[var(--theme-text-muted)]">
+          <button
+            type="button"
+            data-local-images-target="prevPage"
+            data-action="click->local-images#prevPage"
+            class="px-2 py-1 rounded border border-[var(--theme-border)] hover:bg-[var(--theme-bg-tertiary)] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <%= t('dialogs.image_picker.prev_page') %>
+          </button>
+          <span data-local-images-target="pageStatus"></span>
+          <button
+            type="button"
+            data-local-images-target="nextPage"
+            data-action="click->local-images#nextPage"
+            class="px-2 py-1 rounded border border-[var(--theme-border)] hover:bg-[var(--theme-bg-tertiary)] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <%= t('dialogs.image_picker.next_page') %>
+          </button>
+          <label class="flex items-center gap-1">
+            <%= t('dialogs.image_picker.per_page') %>
+            <select
+              data-local-images-target="perPage"
+              data-action="change->local-images#onPerPageChange"
+              class="px-1 py-0.5 border border-[var(--theme-border)] rounded bg-[var(--theme-bg-primary)] text-[var(--theme-text-primary)]"
+            >
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+            </select>
+          </label>
         </div>
       </div>
 
@@ -247,8 +280,41 @@
             placeholder="<%= t('dialogs.image_picker.search_images_placeholder') %>"
           >
         </div>
-        <div class="grid grid-cols-5 gap-2 mb-4 min-h-[200px] max-h-[300px] overflow-y-auto" data-folder-images-target="grid">
+        <div class="grid grid-cols-5 gap-2 mb-2 min-h-[200px] max-h-[300px] overflow-y-auto" data-folder-images-target="grid">
           <!-- Images will be rendered by JavaScript -->
+        </div>
+
+        <!-- Pagination -->
+        <div class="flex items-center justify-between gap-2 mb-4 text-xs text-[var(--theme-text-muted)]">
+          <button
+            type="button"
+            data-folder-images-target="prevPage"
+            data-action="click->folder-images#prevPage"
+            class="px-2 py-1 rounded border border-[var(--theme-border)] hover:bg-[var(--theme-bg-tertiary)] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <%= t('dialogs.image_picker.prev_page') %>
+          </button>
+          <span data-folder-images-target="pageStatus"></span>
+          <button
+            type="button"
+            data-folder-images-target="nextPage"
+            data-action="click->folder-images#nextPage"
+            class="px-2 py-1 rounded border border-[var(--theme-border)] hover:bg-[var(--theme-bg-tertiary)] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <%= t('dialogs.image_picker.next_page') %>
+          </button>
+          <label class="flex items-center gap-1">
+            <%= t('dialogs.image_picker.per_page') %>
+            <select
+              data-folder-images-target="perPage"
+              data-action="change->folder-images#onPerPageChange"
+              class="px-1 py-0.5 border border-[var(--theme-border)] rounded bg-[var(--theme-bg-primary)] text-[var(--theme-text-primary)]"
+            >
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+            </select>
+          </label>
         </div>
       </div>
 

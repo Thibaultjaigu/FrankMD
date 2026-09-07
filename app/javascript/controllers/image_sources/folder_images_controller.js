@@ -6,7 +6,7 @@ import { defaultS3Key } from "lib/s3_key"
 // Handles browsing and selecting images from local filesystem via File System Access API
 
 export default class extends Controller {
-  static targets = ["apiNotice", "browsePrompt", "container", "status", "grid", "search"]
+  static targets = ["apiNotice", "browsePrompt", "container", "status", "grid", "search", "perPage", "prevPage", "nextPage", "pageStatus"]
 
   static values = {
     s3Enabled: Boolean
@@ -16,6 +16,7 @@ export default class extends Controller {
     this.source = new FolderImageSource()
     this.searchTimeout = null
     this.selectedImage = null
+    this.offset = 0
   }
 
   disconnect() {
@@ -26,6 +27,10 @@ export default class extends Controller {
   get s3Option() {
     const el = this.element.querySelector('[data-controller="s3-option"]')
     return el ? this.application.getControllerForElementAndIdentifier(el, "s3-option") : null
+  }
+
+  get perPage() {
+    return this.hasPerPageTarget ? parseInt(this.perPageTarget.value, 10) || 10 : 10
   }
 
   // Called by parent controller when tab becomes active
@@ -56,27 +61,55 @@ export default class extends Controller {
   async browse() {
     const result = await this.source.browse(this.allowedExtensions)
     if (!result.error && !result.cancelled) {
+      this.offset = 0
       this.setupUI()
-      this.source.renderGrid(
-        this.gridTarget,
-        this.hasStatusTarget ? this.statusTarget : null,
-        "click->folder-images#select",
-        result.count
-      )
+      await this.renderPage()
     }
   }
 
   onSearch() {
     if (this.searchTimeout) clearTimeout(this.searchTimeout)
     this.searchTimeout = setTimeout(async () => {
-      const result = await this.source.filter(this.searchTarget.value)
-      this.source.renderGrid(
-        this.gridTarget,
-        this.hasStatusTarget ? this.statusTarget : null,
-        "click->folder-images#select",
-        result.total
-      )
+      this.offset = 0
+      await this.renderPage()
     }, 300)
+  }
+
+  onPerPageChange() {
+    this.offset = 0
+    this.renderPage()
+  }
+
+  prevPage() {
+    this.offset = Math.max(0, this.offset - this.perPage)
+    this.renderPage()
+  }
+
+  nextPage() {
+    this.offset += this.perPage
+    this.renderPage()
+  }
+
+  async renderPage() {
+    const term = this.hasSearchTarget ? this.searchTarget.value : ""
+    const result = await this.source.filter(term, { offset: this.offset, limit: this.perPage })
+    this.source.renderGrid(
+      this.gridTarget,
+      this.hasStatusTarget ? this.statusTarget : null,
+      "click->folder-images#select",
+      result.total
+    )
+    this.updatePagination(result.total)
+  }
+
+  updatePagination(total) {
+    if (this.hasPrevPageTarget) this.prevPageTarget.disabled = this.offset <= 0
+    if (this.hasNextPageTarget) this.nextPageTarget.disabled = this.offset + this.perPage >= total
+    if (this.hasPageStatusTarget) {
+      const from = total === 0 ? 0 : this.offset + 1
+      const to = Math.min(this.offset + this.perPage, total)
+      this.pageStatusTarget.textContent = window.t("dialogs.image_picker.page_status", { from, to, total })
+    }
   }
 
   select(event) {
@@ -129,6 +162,7 @@ export default class extends Controller {
   reset() {
     this.source.reset()
     this.selectedImage = null
+    this.offset = 0
     if (this.hasSearchTarget) this.searchTarget.value = ""
     this.s3Option?.hide()
     this.setupUI()

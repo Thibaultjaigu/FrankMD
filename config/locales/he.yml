@@ -233,6 +233,11 @@ he:
       local_setup_step_1: "ערוך .fed בתיקיית ההערות שלך"
       local_setup_step_2: "הוסף: images_path = /path/to/images"
       search_images_placeholder: "חפש תמונות לפי שם קובץ..."
+      # עימוד
+      per_page: "לעמוד"
+      prev_page: "הקודם"
+      next_page: "הבא"
+      page_status: "מציג %{from}–%{to} מתוך %{total}"
       # תמונות מתיקייה
       filesystem_api_required: "נדרש API לגישה למערכת קבצים"
       filesystem_api_description: "תכונה זו דורשת את ה-File System Access API, שעשוי להיות מושבת בדפדפן שלך."

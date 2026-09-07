@@ -22,8 +22,13 @@ class ImagesController < ApplicationController
 
   # GET /images
   def index
-    images = ImagesService.list(search: params[:search])
-    render json: images
+    limit = params[:limit].present? ? params[:limit].to_i.clamp(1, 100) : 10
+    offset = params[:offset].present? ? [ params[:offset].to_i, 0 ].max : 0
+
+    images = ImagesService.list(search: params[:search], limit: limit, offset: offset)
+    total = ImagesService.count(search: params[:search])
+
+    render json: { images: images, total: total, limit: limit, offset: offset }
   end
 
   # GET /images/preview/*path

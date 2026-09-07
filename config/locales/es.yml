@@ -236,6 +236,11 @@ es:
       local_setup_step_1: "Edita .fed en tu carpeta de notas"
       local_setup_step_2: "Agrega: images_path = /ruta/a/imagenes"
       search_images_placeholder: "Buscar imágenes por nombre de archivo..."
+      # Paginación
+      per_page: "Por página"
+      prev_page: "Anterior"
+      next_page: "Siguiente"
+      page_status: "Mostrando %{from}–%{to} de %{total}"
       # Folder images
       filesystem_api_required: "Se Requiere API de Acceso al Sistema de Archivos"
       filesystem_api_description: "Esta función requiere la API de Acceso al Sistema de Archivos, que puede estar deshabilitada en tu navegador."

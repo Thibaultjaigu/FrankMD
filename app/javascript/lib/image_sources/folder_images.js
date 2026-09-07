@@ -116,8 +116,7 @@ export class FolderImageSource {
     return { count: this.allImages.length, rejected }
   }
 
-  async filter(searchTerm) {
-    const maxImages = 10
+  async filter(searchTerm, { offset = 0, limit = 10 } = {}) {
     const term = searchTerm.toLowerCase().trim()
 
     let filtered = this.allImages
@@ -134,9 +133,9 @@ export class FolderImageSource {
       }
     }
 
-    // Take top N and create object URLs with dimensions
-    const topImages = filtered.slice(0, maxImages)
-    this.displayedImages = await Promise.all(topImages.map(async (img) => {
+    // Take the current page and create object URLs with dimensions
+    const pageImages = filtered.slice(offset, offset + limit)
+    this.displayedImages = await Promise.all(pageImages.map(async (img) => {
       const objectUrl = URL.createObjectURL(img.file)
       const dimensions = await this.getImageDimensions(objectUrl)
       return {
@@ -150,7 +149,7 @@ export class FolderImageSource {
       }
     }))
 
-    return { displayed: this.displayedImages.length, total: filtered.length }
+    return { displayed: this.displayedImages.length, total: filtered.length, offset, limit }
   }
 
   getImageDimensions(url) {

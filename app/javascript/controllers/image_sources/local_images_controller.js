@@ -6,7 +6,7 @@ import { defaultS3Key } from "lib/s3_key"
 // Handles searching and selecting images from the server's images directory
 
 export default class extends Controller {
-  static targets = ["configNotice", "form", "search", "grid"]
+  static targets = ["configNotice", "form", "search", "grid", "perPage", "prevPage", "nextPage", "pageStatus"]
 
   static values = {
     enabled: Boolean,
@@ -16,6 +16,8 @@ export default class extends Controller {
   connect() {
     this.source = new LocalImageSource()
     this.searchTimeout = null
+    this.offset = 0
+    this.total = 0
   }
 
   disconnect() {
@@ -25,6 +27,10 @@ export default class extends Controller {
   get s3Option() {
     const el = this.element.querySelector('[data-controller="s3-option"]')
     return el ? this.application.getControllerForElementAndIdentifier(el, "s3-option") : null
+  }
+
+  get perPage() {
+    return this.hasPerPageTarget ? parseInt(this.perPageTarget.value, 10) || 10 : 10
   }
 
   // Called by parent controller when tab becomes active
@@ -46,17 +52,49 @@ export default class extends Controller {
   }
 
   async loadImages(search = "") {
-    const images = await this.source.load(search)
-    if (!images.error && this.hasGridTarget) {
-      this.source.renderGrid(images, this.gridTarget, "click->local-images#select")
+    const data = await this.source.load(search, { limit: this.perPage, offset: this.offset })
+    if (!data.error && this.hasGridTarget) {
+      this.total = data.total || 0
+      this.source.renderGrid(data.images, this.gridTarget, "click->local-images#select")
+      this.updatePagination()
     }
   }
 
   onSearch() {
     if (this.searchTimeout) clearTimeout(this.searchTimeout)
     this.searchTimeout = setTimeout(() => {
+      this.offset = 0
       this.loadImages(this.searchTarget.value.trim())
     }, 300)
+  }
+
+  onPerPageChange() {
+    this.offset = 0
+    this.loadImages(this.currentSearch())
+  }
+
+  prevPage() {
+    this.offset = Math.max(0, this.offset - this.perPage)
+    this.loadImages(this.currentSearch())
+  }
+
+  nextPage() {
+    this.offset += this.perPage
+    this.loadImages(this.currentSearch())
+  }
+
+  currentSearch() {
+    return this.hasSearchTarget ? this.searchTarget.value.trim() : ""
+  }
+
+  updatePagination() {
+    if (this.hasPrevPageTarget) this.prevPageTarget.disabled = this.offset <= 0
+    if (this.hasNextPageTarget) this.nextPageTarget.disabled = this.offset + this.perPage >= this.total
+    if (this.hasPageStatusTarget) {
+      const from = this.total === 0 ? 0 : this.offset + 1
+      const to = Math.min(this.offset + this.perPage, this.total)
+      this.pageStatusTarget.textContent = window.t("dialogs.image_picker.page_status", { from, to, total: this.total })
+    }
   }
 
   select(event) {
@@ -107,6 +145,8 @@ export default class extends Controller {
   reset() {
     this.source.reset()
     if (this.hasSearchTarget) this.searchTarget.value = ""
+    this.offset = 0
+    this.total = 0
     this.s3Option?.hide()
   }
 }

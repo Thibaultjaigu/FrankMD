@@ -33,35 +33,40 @@ describe("LocalImageSource", () => {
   })
 
   describe("load", () => {
-    it("fetches all images when no search", async () => {
-      const mockImages = [
-        { path: "photo1.jpg", name: "Photo 1" },
-        { path: "photo2.jpg", name: "Photo 2" }
-      ]
+    it("fetches all images when no search, defaulting to limit 10 offset 0", async () => {
+      const mockData = {
+        images: [
+          { path: "photo1.jpg", name: "Photo 1" },
+          { path: "photo2.jpg", name: "Photo 2" }
+        ],
+        total: 2,
+        limit: 10,
+        offset: 0
+      }
 
       global.fetch = vi.fn().mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve(mockImages)
+        json: () => Promise.resolve(mockData)
       })
 
       const result = await source.load()
 
-      expect(global.fetch).toHaveBeenCalledWith("/images", expect.objectContaining({
+      expect(global.fetch).toHaveBeenCalledWith("/images?limit=10&offset=0", expect.objectContaining({
         method: "GET",
         headers: expect.objectContaining({ "Accept": "application/json" })
       }))
-      expect(result).toEqual(mockImages)
+      expect(result).toEqual(mockData)
     })
 
     it("fetches images with search query", async () => {
       global.fetch = vi.fn().mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve([])
+        json: () => Promise.resolve({ images: [], total: 0, limit: 10, offset: 0 })
       })
 
       await source.load("sunset")
 
-      expect(global.fetch).toHaveBeenCalledWith("/images?search=sunset", expect.objectContaining({
+      expect(global.fetch).toHaveBeenCalledWith("/images?search=sunset&limit=10&offset=0", expect.objectContaining({
         method: "GET",
         headers: expect.objectContaining({ "Accept": "application/json" })
       }))
@@ -70,12 +75,26 @@ describe("LocalImageSource", () => {
     it("encodes search query", async () => {
       global.fetch = vi.fn().mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve([])
+        json: () => Promise.resolve({ images: [], total: 0, limit: 10, offset: 0 })
       })
 
       await source.load("cats & dogs")
 
-      expect(global.fetch).toHaveBeenCalledWith("/images?search=cats%20%26%20dogs", expect.objectContaining({
+      expect(global.fetch).toHaveBeenCalledWith("/images?search=cats%20%26%20dogs&limit=10&offset=0", expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({ "Accept": "application/json" })
+      }))
+    })
+
+    it("passes custom limit and offset as query params", async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ images: [], total: 0, limit: 25, offset: 25 })
+      })
+
+      await source.load("", { limit: 25, offset: 25 })
+
+      expect(global.fetch).toHaveBeenCalledWith("/images?limit=25&offset=25", expect.objectContaining({
         method: "GET",
         headers: expect.objectContaining({ "Accept": "application/json" })
       }))

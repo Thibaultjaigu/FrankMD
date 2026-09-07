@@ -244,6 +244,11 @@ en:
       local_setup_step_1: "Edit .fed in your notes folder"
       local_setup_step_2: "Add: images_path = /path/to/images"
       search_images_placeholder: "Search images by filename..."
+      # Pagination
+      per_page: "Per page"
+      prev_page: "Previous"
+      next_page: "Next"
+      page_status: "Showing %{from}–%{to} of %{total}"
       # Folder images
       filesystem_api_required: "File System Access API Required"
       filesystem_api_description: "This feature requires the File System Access API, which may be disabled in your browser."

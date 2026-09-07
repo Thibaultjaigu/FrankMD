@@ -143,7 +143,7 @@ describe("FolderImageSource", () => {
       expect(result.total).toBe(1)
     })
 
-    it("limits displayed images to 10", async () => {
+    it("limits displayed images to 10 by default", async () => {
       source.allImages = Array.from({ length: 15 }, (_, i) => ({
         name: `image${i}.jpg`,
         file: new Blob(),
@@ -155,6 +155,56 @@ describe("FolderImageSource", () => {
 
       expect(result.displayed).toBe(10)
       expect(result.total).toBe(15)
+    })
+
+    it("slices by offset and limit", async () => {
+      source.allImages = Array.from({ length: 15 }, (_, i) => ({
+        name: `image${i}.jpg`,
+        file: new Blob(),
+        lastModified: i,
+        size: 1024
+      }))
+
+      const firstPage = await source.filter("", { offset: 0, limit: 10 })
+      expect(firstPage.displayed).toBe(10)
+      expect(firstPage.total).toBe(15)
+      expect(source.displayedImages.map(img => img.name)).toEqual(
+        Array.from({ length: 10 }, (_, i) => `image${i}.jpg`)
+      )
+
+      const secondPage = await source.filter("", { offset: 10, limit: 10 })
+      expect(secondPage.displayed).toBe(5)
+      expect(secondPage.total).toBe(15)
+      expect(source.displayedImages.map(img => img.name)).toEqual(
+        Array.from({ length: 5 }, (_, i) => `image${i + 10}.jpg`)
+      )
+    })
+
+    it("returns an empty page when offset is past the end", async () => {
+      source.allImages = Array.from({ length: 5 }, (_, i) => ({
+        name: `image${i}.jpg`,
+        file: new Blob(),
+        lastModified: i,
+        size: 1024
+      }))
+
+      const result = await source.filter("", { offset: 20, limit: 10 })
+
+      expect(result.displayed).toBe(0)
+      expect(result.total).toBe(5)
+    })
+
+    it("resets to the requested page when combined with a search term", async () => {
+      source.allImages = [
+        { name: "cat1.jpg", file: new Blob(), lastModified: 1, size: 1024 },
+        { name: "cat2.jpg", file: new Blob(), lastModified: 2, size: 1024 },
+        { name: "dog.png", file: new Blob(), lastModified: 3, size: 1024 }
+      ]
+
+      const result = await source.filter("cat", { offset: 0, limit: 10 })
+
+      expect(result.total).toBe(2)
+      expect(result.displayed).toBe(2)
     })
 
     it("revokes previous object URLs", async () => {

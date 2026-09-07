@@ -14,10 +14,14 @@ export class LocalImageSource {
     this.selectedPath = null
   }
 
-  async load(search = "") {
+  async load(search = "", { limit = 10, offset = 0 } = {}) {
     try {
-      const url = search ? `/images?search=${encodeURIComponent(search)}` : "/images"
-      const response = await get(url, { responseKind: "json" })
+      const params = []
+      if (search) params.push(`search=${encodeURIComponent(search)}`)
+      params.push(`limit=${encodeURIComponent(limit)}`)
+      params.push(`offset=${encodeURIComponent(offset)}`)
+
+      const response = await get(`/images?${params.join("&")}`, { responseKind: "json" })
 
       if (!response.ok) {
         throw new Error("Failed to load images")

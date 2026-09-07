@@ -139,9 +139,9 @@ export default class extends Controller {
   async loadRefImages(search = "") {
     if (!this.imagesEnabledValue || !this.hasRefGridTarget) return
 
-    const images = await this.source.loadRefImages(search)
-    if (!images.error) {
-      this.source.renderRefImageGrid(images, this.refGridTarget, "click->ai-images#selectRefImage")
+    const data = await this.source.loadRefImages(search)
+    if (!data.error) {
+      this.source.renderRefImageGrid(data.images, this.refGridTarget, "click->ai-images#selectRefImage")
     }
   }
 

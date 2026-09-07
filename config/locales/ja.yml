@@ -236,6 +236,11 @@ ja:
       local_setup_step_1: "ノートフォルダの.fedを編集"
       local_setup_step_2: "追加: images_path = /path/to/images"
       search_images_placeholder: "ファイル名で画像を検索..."
+      # ページネーション
+      per_page: "1ページあたり"
+      prev_page: "前へ"
+      next_page: "次へ"
+      page_status: "%{total}件中 %{from}–%{to}件を表示"
       # Folder images
       filesystem_api_required: "File System Access APIが必要です"
       filesystem_api_description: "この機能にはFile System Access APIが必要ですが、ブラウザで無効になっている可能性があります。"

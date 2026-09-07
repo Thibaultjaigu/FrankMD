@@ -122,15 +122,18 @@ class ImagesControllerTest < ActionDispatch::IntegrationTest
       assert_equal true, data["enabled"]
     end
 
-    test "index returns list of images" do
+    test "index returns list of images with pagination metadata" do
       create_test_image("photo1.jpg")
       create_test_image("photo2.png")
 
       get images_url, as: :json
       assert_response :success
 
-      images = JSON.parse(response.body)
-      assert_equal 2, images.length
+      data = JSON.parse(response.body)
+      assert_equal 2, data["images"].length
+      assert_equal 2, data["total"]
+      assert_equal 10, data["limit"]
+      assert_equal 0, data["offset"]
     end
 
     test "index filters by search" do
@@ -140,9 +143,34 @@ class ImagesControllerTest < ActionDispatch::IntegrationTest
       get images_url, params: { search: "cat" }, as: :json
       assert_response :success
 
-      images = JSON.parse(response.body)
-      assert_equal 1, images.length
-      assert_equal "cat.jpg", images[0]["name"]
+      data = JSON.parse(response.body)
+      assert_equal 1, data["images"].length
+      assert_equal "cat.jpg", data["images"][0]["name"]
+      assert_equal 1, data["total"]
+    end
+
+    test "index honors limit and offset params" do
+      5.times { |i| create_test_image("photo#{i}.jpg") }
+
+      get images_url, params: { limit: 2, offset: 2 }, as: :json
+      assert_response :success
+
+      data = JSON.parse(response.body)
+      assert_equal 2, data["images"].length
+      assert_equal 5, data["total"]
+      assert_equal 2, data["limit"]
+      assert_equal 2, data["offset"]
+    end
+
+    test "index clamps an oversized limit and a negative offset" do
+      create_test_image("photo.jpg")
+
+      get images_url, params: { limit: 500, offset: -10 }, as: :json
+      assert_response :success
+
+      data = JSON.parse(response.body)
+      assert_equal 100, data["limit"]
+      assert_equal 0, data["offset"]
     end
 
     test "preview serves image file" do
