@@ -121,8 +121,13 @@ class AiService
       chat = RubyLLM.chat(model: model, provider: :openrouter)
       chat.with_params(modalities: %w[text image])
 
-      content = build_image_content(prompt, reference_image_path_full)
-      response = chat.ask(content)
+      # ruby_llm 2.0: attachments are passed via `with:` rather than a Content
+      # object; the response is a Message exposing #content (text) and #attachments.
+      response = if reference_image_path_full
+        chat.ask(prompt, with: reference_image_path_full.to_s)
+      else
+        chat.ask(prompt)
+      end
 
       extract_image_from_response(response, model)
     rescue StandardError => e
@@ -131,10 +136,10 @@ class AiService
     end
 
     def extract_image_from_response(response, model)
-      content = response.content
-
-      if content.is_a?(RubyLLM::Content) && content.attachments.any?
-        attachment = content.attachments.first
+      # ruby_llm 2.0: a Message carries generated files in #attachments; #content
+      # is the text the model returned (if any).
+      if response.attachments.any?
+        attachment = response.attachments.first
         {
           data: Base64.strict_encode64(attachment.content),
           mime_type: attachment.mime_type || "image/png",
@@ -142,7 +147,7 @@ class AiService
           revised_prompt: nil
         }
       else
-        text = content.is_a?(RubyLLM::Content) ? content.text : content.to_s
+        text = response.content.to_s
         if text.present?
           Rails.logger.warn "Image model returned text instead of image: #{text.truncate(200)}"
         end
@@ -151,14 +156,6 @@ class AiService
     end
 
     private
-
-    def build_image_content(prompt, reference_image_path)
-      return prompt unless reference_image_path
-
-      content = RubyLLM::Content.new(prompt)
-      content.add_attachment(reference_image_path.to_s)
-      content
-    end
 
     def configure_image_client
       RubyLLM.configure do |config|

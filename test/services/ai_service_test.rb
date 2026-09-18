@@ -337,12 +337,9 @@ class AiServiceTest < ActiveSupport::TestCase
 
   # === Image generation response parsing ===
 
-  test "extract_image_from_response extracts base64 from RubyLLM Content with attachments" do
+  test "extract_image_from_response extracts base64 from a Message with attachments" do
     mock_attachment = stub(content: "binary_image_data", mime_type: "image/png")
-    mock_content = stub(attachments: [ mock_attachment ], text: "Image generated")
-    mock_content.stubs(:is_a?).returns(false)
-    mock_content.stubs(:is_a?).with(RubyLLM::Content).returns(true)
-    mock_response = stub(content: mock_content)
+    mock_response = stub(attachments: [ mock_attachment ], content: "Image generated")
 
     result = AiService.extract_image_from_response(mock_response, "google/gemini-3.1-flash-image-preview")
 
@@ -353,18 +350,15 @@ class AiServiceTest < ActiveSupport::TestCase
   end
 
   test "extract_image_from_response returns error when no attachments" do
-    mock_content = stub(attachments: [], text: "I cannot generate that image")
-    mock_content.stubs(:is_a?).returns(false)
-    mock_content.stubs(:is_a?).with(RubyLLM::Content).returns(true)
-    mock_response = stub(content: mock_content)
+    mock_response = stub(attachments: [], content: "I cannot generate that image")
 
     result = AiService.extract_image_from_response(mock_response, "model")
 
     assert_equal "No image data in response", result[:error]
   end
 
-  test "extract_image_from_response handles plain string content" do
-    mock_response = stub(content: "Some text response")
+  test "extract_image_from_response returns error for a text-only response" do
+    mock_response = stub(attachments: [], content: "Some text response")
 
     result = AiService.extract_image_from_response(mock_response, "model")
 
@@ -417,10 +411,7 @@ class AiServiceImageGenerationTest < ActiveSupport::TestCase
 
   test "generate_image text-only returns image data on success" do
     mock_attachment = stub(content: "png_binary_data", mime_type: "image/png")
-    mock_content = stub(attachments: [ mock_attachment ], text: "Image generated")
-    mock_content.stubs(:is_a?).returns(false)
-    mock_content.stubs(:is_a?).with(RubyLLM::Content).returns(true)
-    mock_response = stub(content: mock_content)
+    mock_response = stub(attachments: [ mock_attachment ], content: "Image generated")
 
     mock_chat = stub
     mock_chat.stubs(:with_params).returns(mock_chat)
@@ -447,7 +438,7 @@ class AiServiceImageGenerationTest < ActiveSupport::TestCase
     assert_equal "Image generation failed", result[:error]
   end
 
-  test "generate_image with reference passes content with attachment" do
+  test "generate_image with reference passes the image via with:" do
     # Create a reference image file
     ref_path = create_test_note("ref_image.png")
     png_data = [
@@ -461,14 +452,11 @@ class AiServiceImageGenerationTest < ActiveSupport::TestCase
     File.binwrite(ref_path, png_data)
 
     mock_attachment = stub(content: "edited_binary_data", mime_type: "image/jpeg")
-    mock_content = stub(attachments: [ mock_attachment ], text: "Edited image")
-    mock_content.stubs(:is_a?).returns(false)
-    mock_content.stubs(:is_a?).with(RubyLLM::Content).returns(true)
-    mock_response = stub(content: mock_content)
+    mock_response = stub(attachments: [ mock_attachment ], content: "Edited image")
 
     mock_chat = stub
     mock_chat.stubs(:with_params).returns(mock_chat)
-    mock_chat.stubs(:ask).with(instance_of(RubyLLM::Content)).returns(mock_response)
+    mock_chat.stubs(:ask).with("Make it brighter", with: instance_of(String)).returns(mock_response)
     RubyLLM.stubs(:chat).returns(mock_chat)
 
     result = AiService.generate_image("Make it brighter", reference_image_path: "ref_image.png")
@@ -480,10 +468,7 @@ class AiServiceImageGenerationTest < ActiveSupport::TestCase
   end
 
   test "generate_image handles text-only response (no image generated)" do
-    mock_content = stub(attachments: [], text: "I cannot generate that image")
-    mock_content.stubs(:is_a?).returns(false)
-    mock_content.stubs(:is_a?).with(RubyLLM::Content).returns(true)
-    mock_response = stub(content: mock_content)
+    mock_response = stub(attachments: [], content: "I cannot generate that image")
 
     mock_chat = stub
     mock_chat.stubs(:with_params).returns(mock_chat)
@@ -497,14 +482,11 @@ class AiServiceImageGenerationTest < ActiveSupport::TestCase
 
   test "generate_image falls back to text-only when reference image not found" do
     mock_attachment = stub(content: "fallback_data", mime_type: "image/png")
-    mock_content = stub(attachments: [ mock_attachment ], text: "Generated")
-    mock_content.stubs(:is_a?).returns(false)
-    mock_content.stubs(:is_a?).with(RubyLLM::Content).returns(true)
-    mock_response = stub(content: mock_content)
+    mock_response = stub(attachments: [ mock_attachment ], content: "Generated")
 
     mock_chat = stub
     mock_chat.stubs(:with_params).returns(mock_chat)
-    # When ref image not found, prompt is passed as string (not Content)
+    # When the ref image is not found, the prompt is asked with no attachment.
     mock_chat.stubs(:ask).with("A cat").returns(mock_response)
     RubyLLM.stubs(:chat).returns(mock_chat)
 
