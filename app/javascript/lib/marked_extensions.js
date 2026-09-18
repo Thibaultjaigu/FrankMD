@@ -164,6 +164,68 @@ export const wikilinkExtension = {
   }
 }
 
+// Math extensions (#164): TeX math via KaTeX, rendered WITHOUT weakening the
+// DOMPurify boundary. The tokenizers emit escaped-TeX placeholders — plain text
+// inside a class-tagged element, never `style` — so the sanitizer keeps them
+// untouched. math_renderer.js then runs KaTeX over those placeholders AFTER
+// sanitization (trust:false), so KaTeX's style-heavy output never has to pass
+// through DOMPurify. See lib/math_renderer.js.
+
+// Block math: $$ ... $$ (may span multiple lines). Block-level so the preview's
+// line mapper annotates it for scroll-sync.
+export const mathBlockExtension = {
+  name: "mathBlock",
+  level: "block",
+  start(src) {
+    const i = src.indexOf("$$")
+    return i < 0 ? undefined : i
+  },
+  tokenizer(src) {
+    // $$ must open at the start of the block; content is non-greedy up to the
+    // next $$. Trailing newline(s) are consumed so the block separates cleanly.
+    const match = src.match(/^\$\$([\s\S]+?)\$\$(?:\n+|$)/)
+    if (match && match[1].trim().length > 0) {
+      return {
+        type: "mathBlock",
+        raw: match[0],
+        text: match[1].trim()
+      }
+    }
+  },
+  renderer(token) {
+    return `<div class="math-block">${escapeHtml(token.text)}</div>\n`
+  }
+}
+
+// Inline math: $ ... $. Deliberately conservative so prose with currency stays
+// literal: the opening $ must not be followed by whitespace, the closing $ must
+// not be preceded by whitespace nor followed by a digit ("$5 and $10" is not
+// math). Backslash-escaped chars inside are allowed (\$ stays literal).
+export const mathInlineExtension = {
+  name: "mathInline",
+  level: "inline",
+  start(src) {
+    // Only offer the first UNescaped "$"; \$ is a literal dollar sign.
+    const i = src.search(/(?<!\\)\$/)
+    return i < 0 ? undefined : i
+  },
+  tokenizer(src) {
+    // Not $$ (that's block). Opening $ not followed by space; content allows
+    // escaped chars; closing $ not preceded by space and not followed by digit.
+    const match = src.match(/^\$(?!\$)(?!\s)((?:\\.|[^\\$])+?)(?<!\s)\$(?!\d)/)
+    if (match) {
+      return {
+        type: "mathInline",
+        raw: match[0],
+        text: match[1]
+      }
+    }
+  },
+  renderer(token) {
+    return `<span class="math-inline">${escapeHtml(token.text)}</span>`
+  }
+}
+
 // Export all extensions as an array for easy use with marked.use()
 export const allExtensions = [
   superscriptExtension,
@@ -171,5 +233,7 @@ export const allExtensions = [
   highlightExtension,
   emojiExtension,
   iconExtension,
-  wikilinkExtension
+  wikilinkExtension,
+  mathBlockExtension,
+  mathInlineExtension
 ]

@@ -1,6 +1,7 @@
 import { Controller } from "@hotwired/stimulus"
 import { calculateLineFromScroll, scrollTopForElement } from "lib/scroll_utils"
 import { parseWithLineNumbers, findElementByLine, findLineAtScroll } from "lib/markdown_line_mapper"
+import { renderMathIn } from "lib/math_renderer"
 
 // Preview Controller
 // Handles markdown preview panel rendering, zoom, and scroll sync
@@ -204,6 +205,10 @@ export default class extends Controller {
 
     // Parse with line numbers for accurate scroll sync
     this.contentTarget.innerHTML = parseWithLineNumbers(content, frontmatterLines)
+
+    // Render TeX math AFTER sanitization (KaTeX writes its style-heavy output
+    // straight to the DOM, so it never has to pass through DOMPurify). See #164.
+    renderMathIn(this.contentTarget)
 
     // Add copy buttons to code blocks
     this._addCodeCopyButtons()

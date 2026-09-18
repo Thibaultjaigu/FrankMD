@@ -12,6 +12,9 @@ pin_all_from "app/javascript/lib", under: "lib"
 # Markdown parsing
 pin "marked", to: "marked.js" # @15.0.6 - vendored from esm.sh
 
+# Math rendering
+pin "katex", to: "katex.js" # @0.16.47 - vendored, self-hosted (CSS+fonts in public/fonts/katex)
+
 # CodeMirror 6
 pin "@replit/codemirror-vim", to: "@replit--codemirror-vim.js" # @6.3.0 - vendored from esm.sh (externals: @codemirror/*)
 pin "@codemirror/view", to: "@codemirror--view.js" # @6.39.11

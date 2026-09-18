@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect } from "vitest"
-import { iconExtension, wikilinkExtension } from "../../../app/javascript/lib/marked_extensions.js"
+import { iconExtension, wikilinkExtension, mathInlineExtension, mathBlockExtension } from "../../../app/javascript/lib/marked_extensions.js"
 
 describe("wikilinkExtension", () => {
   describe("start()", () => {
@@ -142,6 +142,133 @@ describe("iconExtension", () => {
       expect(html).toContain('<path d="M1 2 3"/>')
       expect(html).toContain('class="frankmd-inline-icon"')
       expect(html).not.toContain('style="')
+    })
+  })
+})
+
+describe("mathInlineExtension", () => {
+  describe("start()", () => {
+    it("returns the index of the first unescaped $", () => {
+      expect(mathInlineExtension.start("The equation is $E=mc^2$")).toBe(16)
+    })
+
+    it("ignores an escaped \\$ (currency stays literal)", () => {
+      expect(mathInlineExtension.start("costs \\$5 today")).toBeUndefined()
+    })
+
+    it("returns undefined when there is no $", () => {
+      expect(mathInlineExtension.start("no dollars here")).toBeUndefined()
+    })
+  })
+
+  describe("tokenizer()", () => {
+    it("matches simple inline math", () => {
+      const t = mathInlineExtension.tokenizer("$E = mc^2$ rest")
+      expect(t).toBeDefined()
+      expect(t.type).toBe("mathInline")
+      expect(t.text).toBe("E = mc^2")
+      expect(t.raw).toBe("$E = mc^2$")
+    })
+
+    it("matches a single-token expression", () => {
+      expect(mathInlineExtension.tokenizer("$x$").text).toBe("x")
+    })
+
+    it("does NOT match a lone currency value ($10.)", () => {
+      expect(mathInlineExtension.tokenizer("$10.")).toBeUndefined()
+    })
+
+    it("does NOT match two currency values in a sentence", () => {
+      expect(mathInlineExtension.tokenizer("$10 and that costs $20.")).toBeUndefined()
+    })
+
+    it("does NOT match when the closing $ is followed by a digit", () => {
+      expect(mathInlineExtension.tokenizer("$100 to $200")).toBeUndefined()
+    })
+
+    it("rejects a space right after the opening $", () => {
+      expect(mathInlineExtension.tokenizer("$ x$")).toBeUndefined()
+    })
+
+    it("rejects a space right before the closing $", () => {
+      expect(mathInlineExtension.tokenizer("$x $")).toBeUndefined()
+    })
+
+    it("does NOT swallow a $$ block delimiter", () => {
+      expect(mathInlineExtension.tokenizer("$$block$$")).toBeUndefined()
+    })
+
+    it("stops at the first valid closing $ so adjacent expressions are independent", () => {
+      const t = mathInlineExtension.tokenizer("$a$ and $b$")
+      expect(t.raw).toBe("$a$")
+      expect(t.text).toBe("a")
+    })
+
+    it("keeps escaped \\$ inside the expression", () => {
+      const t = mathInlineExtension.tokenizer("$a \\$ b$ rest")
+      expect(t).toBeDefined()
+      expect(t.text).toBe("a \\$ b")
+    })
+  })
+
+  describe("renderer()", () => {
+    it("emits a class-tagged span with the TeX as text, no style", () => {
+      const html = mathInlineExtension.renderer({ text: "E = mc^2" })
+      expect(html).toBe('<span class="math-inline">E = mc^2</span>')
+      expect(html).not.toContain("style")
+    })
+
+    it("HTML-escapes the TeX so it cannot inject markup", () => {
+      const html = mathInlineExtension.renderer({ text: "<img src=x onerror=alert(1)>" })
+      expect(html).not.toContain("<img")
+      expect(html).toContain("&lt;img")
+    })
+  })
+})
+
+describe("mathBlockExtension", () => {
+  describe("start()", () => {
+    it("returns the index of $$", () => {
+      expect(mathBlockExtension.start("text\n$$\nx=y\n$$")).toBe(5)
+    })
+
+    it("returns undefined without $$", () => {
+      expect(mathBlockExtension.start("no block here")).toBeUndefined()
+    })
+  })
+
+  describe("tokenizer()", () => {
+    it("matches a multiline display equation", () => {
+      const t = mathBlockExtension.tokenizer("$$\nx = \\frac{-b}{2a}\n$$\nmore")
+      expect(t).toBeDefined()
+      expect(t.type).toBe("mathBlock")
+      expect(t.text).toBe("x = \\frac{-b}{2a}")
+    })
+
+    it("matches a single-line $$...$$", () => {
+      expect(mathBlockExtension.tokenizer("$$E=mc^2$$").text).toBe("E=mc^2")
+    })
+
+    it("does NOT match an empty/whitespace block (malformed)", () => {
+      expect(mathBlockExtension.tokenizer("$$   $$")).toBeUndefined()
+    })
+
+    it("does NOT match an unterminated block", () => {
+      expect(mathBlockExtension.tokenizer("$$\nx = y\n")).toBeUndefined()
+    })
+  })
+
+  describe("renderer()", () => {
+    it("emits a class-tagged div with the TeX as text, no style", () => {
+      const html = mathBlockExtension.renderer({ text: "x = y" })
+      expect(html).toBe('<div class="math-block">x = y</div>\n')
+      expect(html).not.toContain("style")
+    })
+
+    it("HTML-escapes the TeX", () => {
+      const html = mathBlockExtension.renderer({ text: "</div><script>alert(1)</script>" })
+      expect(html).not.toContain("<script>")
+      expect(html).toContain("&lt;script&gt;")
     })
   })
 })

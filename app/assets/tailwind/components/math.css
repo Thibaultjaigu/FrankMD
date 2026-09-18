@@ -1,0 +1,20 @@
+/* KaTeX math rendering (#164).
+ * KaTeX inherits the preview's `color`, so light/dark themes and zoom work for
+ * free. These rules only handle layout around the rendered math. */
+@layer components {
+  /* Display equations: let a very wide equation scroll horizontally instead of
+     stretching the preview and spawning a page-level scrollbar. */
+  .math-block {
+    overflow-x: auto;
+    overflow-y: hidden;
+    margin: 0.75rem 0;
+  }
+
+  /* A TeX error (throwOnError:false renders it inline; the renderer's catch adds
+     this class for anything unexpected). Themed error color. */
+  .math-error,
+  .math-block .katex-error,
+  .math-inline .katex-error {
+    color: var(--theme-error, #dc2626);
+  }
+}

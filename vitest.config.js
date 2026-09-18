@@ -11,6 +11,7 @@ export default defineConfig({
     alias: {
       'lib': path.resolve(__dirname, 'app/javascript/lib'),
       'marked': path.resolve(__dirname, 'test/javascript/mocks/marked.js'),
+      'katex': path.resolve(__dirname, 'test/javascript/mocks/katex.js'),
       // Point at the vendored file rather than an npm copy, so the sanitizer
       // specs exercise the exact artifact that ships to the browser.
       'dompurify': path.resolve(__dirname, 'vendor/javascript/dompurify.js'),
