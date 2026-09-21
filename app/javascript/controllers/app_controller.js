@@ -371,6 +371,8 @@ export default class extends Controller {
       this.updateUrl(newPath)
     }
 
+    this.getAutosaveController()?.renameFile(oldPath, newPath, type)
+
     // Tree is already updated by Turbo Stream
   }
 
@@ -1371,11 +1373,15 @@ export default class extends Controller {
       this.updateUrl(newPath)
     }
 
+    this.getAutosaveController()?.renameFile(oldPath, newPath, type)
+
     // Tree is already updated by Turbo Stream
   }
 
   onFileDeleted(event) {
-    const { path } = event.detail
+    const { path, type } = event.detail
+
+    this.getAutosaveController()?.deleteFile(path, type)
 
     // Clear editor if deleted file was currently open
     if (this.currentFile === path) {

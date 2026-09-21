@@ -30,6 +30,16 @@ class NotesService
     true
   end
 
+  # Update an existing note without creating missing parent directories. This
+  # keeps stale autosave requests from recreating a moved or deleted note.
+  def update(path, content)
+    full_path = safe_path(path)
+    raise NotFoundError, "Note not found: #{path}" unless full_path.file?
+
+    atomic_write(full_path, content)
+    true
+  end
+
   def delete(path)
     full_path = safe_path(path)
     raise NotFoundError, "Note not found: #{path}" unless full_path.file?

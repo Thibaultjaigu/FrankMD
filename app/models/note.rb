@@ -68,12 +68,19 @@ class Note
     service.read(normalized_path)
   end
 
-  def save
+  def save(existing_only: false)
     return false unless valid?
-    service.write(normalized_path, content || "")
+    if existing_only
+      service.update(normalized_path, content || "")
+    else
+      service.write(normalized_path, content || "")
+    end
     true
   rescue NotesService::InvalidPathError => e
     errors.add(:path, e.message)
+    false
+  rescue NotesService::NotFoundError
+    errors.add(:base, I18n.t("errors.note_not_found"))
     false
   rescue Errno::EACCES, Errno::EPERM
     errors.add(:base, I18n.t("errors.permission_denied"))
