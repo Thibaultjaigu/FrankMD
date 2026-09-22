@@ -553,4 +553,105 @@ describe("AutosaveController — Content Loss Detection", () => {
       expect(saveNowSpy).not.toHaveBeenCalled()
     })
   })
+
+  describe("file lifecycle changes", () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+      controller.setFile("foo.md", "saved content")
+      mockCodemirrorValue = "edited content"
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it("renames a pending autosave without clearing dirty state", async () => {
+      controller.scheduleAutoSave()
+
+      expect(controller.renameFile("foo.md", "bar.md", "file")).toBe(true)
+      expect(controller.currentFile).toBe("bar.md")
+      expect(controller._lastSavedContent).toBe("saved content")
+      expect(controller.hasUnsavedChanges).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(AutosaveController.SAVE_DEBOUNCE_MS)
+
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+      expect(global.fetch.mock.calls[0][0]).toContain("/notes/bar.md")
+      expect(global.fetch.mock.calls[0][0]).not.toContain("/notes/foo.md")
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toEqual({ content: "edited content" })
+      expect(controller.hasUnsavedChanges).toBe(false)
+    })
+
+    it("remaps a pending autosave inside a renamed folder", async () => {
+      controller.setFile("docs/foo.md", "saved content")
+      controller.scheduleAutoSave()
+
+      expect(controller.renameFile("docs", "archive", "folder")).toBe(true)
+      expect(controller.currentFile).toBe("archive/foo.md")
+      expect(controller.hasUnsavedChanges).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(AutosaveController.SAVE_DEBOUNCE_MS)
+
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+      expect(global.fetch.mock.calls[0][0]).toContain("/notes/archive/foo.md")
+      expect(global.fetch.mock.calls[0][0]).not.toContain("/notes/docs/foo.md")
+    })
+
+    it("does not remap a path that only shares a folder prefix", () => {
+      controller.setFile("docs-old/foo.md", "saved content")
+
+      expect(controller.renameFile("docs", "archive", "folder")).toBe(false)
+      expect(controller.currentFile).toBe("docs-old/foo.md")
+    })
+
+    it("clears a pending autosave when the note is deleted", async () => {
+      controller.scheduleAutoSave()
+
+      expect(controller.deleteFile("foo.md", "file")).toBe(true)
+      expect(controller.currentFile).toBeNull()
+      expect(controller.saveTimeout).toBeNull()
+      expect(controller.saveMaxIntervalTimeout).toBeNull()
+      expect(controller.hasUnsavedChanges).toBe(false)
+
+      await vi.advanceTimersByTimeAsync(AutosaveController.SAVE_DEBOUNCE_MS)
+
+      expect(global.fetch).not.toHaveBeenCalled()
+    })
+
+    it("ignores a late response from a save started before deletion", async () => {
+      let resolveFetch
+      global.fetch = vi.fn().mockImplementation(() => new Promise((resolve) => {
+        resolveFetch = resolve
+      }))
+
+      controller.scheduleAutoSave()
+      const savePromise = controller.saveNow()
+      expect(controller._isSaving).toBe(true)
+
+      controller.deleteFile("foo.md", "file")
+      resolveFetch({ ok: true })
+      await savePromise
+
+      expect(controller.currentFile).toBeNull()
+      expect(controller.hasUnsavedChanges).toBe(false)
+      expect(controller._lastSavedContent).toBeNull()
+    })
+
+    it("reschedules the renamed note when the old in-flight save fails", async () => {
+      let resolveFetch
+      global.fetch = vi.fn().mockImplementation(() => new Promise((resolve) => {
+        resolveFetch = resolve
+      }))
+
+      controller.scheduleAutoSave()
+      const savePromise = controller.saveNow()
+      controller.renameFile("foo.md", "bar.md", "file")
+      resolveFetch({ ok: false })
+      await savePromise
+
+      expect(controller.currentFile).toBe("bar.md")
+      expect(controller.hasUnsavedChanges).toBe(true)
+      expect(controller.saveTimeout).not.toBeNull()
+    })
+  })
 })

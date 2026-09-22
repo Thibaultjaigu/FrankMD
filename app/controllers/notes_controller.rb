@@ -93,10 +93,11 @@ class NotesController < ApplicationController
   def update
     @note.content = params[:content] || ""
 
-    if @note.save
+    if @note.save(existing_only: true)
       render json: { path: @note.path, message: t("success.note_saved") }
     else
-      render json: { error: @note.errors.full_messages.join(", ") }, status: :unprocessable_entity
+      status = @note.errors[:base].include?(t("errors.note_not_found")) ? :not_found : :unprocessable_entity
+      render json: { error: @note.errors.full_messages.join(", ") }, status: status
     end
   end
 

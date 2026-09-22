@@ -261,11 +261,51 @@ class NotesControllerTest < ActionDispatch::IntegrationTest
     assert_equal "New content", File.read(@test_notes_dir.join("test.md"))
   end
 
-  test "update creates note if it does not exist" do
-    patch update_note_url(path: "new.md"), params: { content: "Content" }, as: :json
+  test "update returns 404 without creating a missing note" do
+    patch update_note_url(path: "missing.md"), params: { content: "stale autosave" }, as: :json
+    assert_response :not_found
+
+    assert_equal "Note not found", JSON.parse(response.body)["error"]
+    refute @test_notes_dir.join("missing.md").exist?
+  end
+
+  test "stale update cannot recreate a note after rename" do
+    create_test_note("foo.md", "Original content")
+
+    post rename_note_url(path: "foo.md"), params: { new_path: "bar.md" }, as: :json
     assert_response :success
 
-    assert @test_notes_dir.join("new.md").exist?
+    patch update_note_url(path: "foo.md"), params: { content: "stale autosave" }, as: :json
+    assert_response :not_found
+
+    refute @test_notes_dir.join("foo.md").exist?
+    assert_equal "Original content", @test_notes_dir.join("bar.md").read
+  end
+
+  test "stale update cannot recreate a deleted note" do
+    create_test_note("foo.md")
+
+    delete destroy_note_url(path: "foo.md"), as: :json
+    assert_response :success
+
+    patch update_note_url(path: "foo.md"), params: { content: "stale autosave" }, as: :json
+    assert_response :not_found
+
+    refute @test_notes_dir.join("foo.md").exist?
+  end
+
+  test "stale nested update cannot recreate a renamed parent folder" do
+    create_test_folder("docs")
+    create_test_note("docs/foo.md", "Original content")
+
+    post rename_folder_url(path: "docs"), params: { new_path: "archive" }, as: :json
+    assert_response :success
+
+    patch update_note_url(path: "docs/foo.md"), params: { content: "stale autosave" }, as: :json
+    assert_response :not_found
+
+    refute @test_notes_dir.join("docs").exist?
+    assert_equal "Original content", @test_notes_dir.join("archive/foo.md").read
   end
 
   test "update refuses the root config file" do

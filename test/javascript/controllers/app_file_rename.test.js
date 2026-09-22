@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi } from "vitest"
+import AppController from "../../../app/javascript/controllers/app_controller"
 
 /**
  * Tests for the folder rename path remapping logic from app_controller.js.
@@ -93,5 +94,62 @@ describe("onFileRenamed: currentFile remapping", () => {
   it("handles undefined currentFile", () => {
     const result = remapCurrentFile(undefined, "project", "app")
     expect(result).toBe(undefined)
+  })
+})
+
+describe("onFileRenamed: autosave synchronization", () => {
+  function appWith(currentFile) {
+    const autosave = { renameFile: vi.fn() }
+    return {
+      app: {
+        currentFile,
+        expandedFolders: new Set(),
+        getAutosaveController: () => autosave,
+        updatePathDisplay: vi.fn(),
+        updateUrl: vi.fn()
+      },
+      autosave
+    }
+  }
+
+  it("updates autosave when the active file is renamed", () => {
+    const { app, autosave } = appWith("foo.md")
+
+    AppController.prototype.onFileRenamed.call(app, {
+      detail: { oldPath: "foo.md", newPath: "bar.md", type: "file" }
+    })
+
+    expect(app.currentFile).toBe("bar.md")
+    expect(autosave.renameFile).toHaveBeenCalledWith("foo.md", "bar.md", "file")
+  })
+
+  it("updates autosave when the active file's folder is renamed", () => {
+    const { app, autosave } = appWith("docs/foo.md")
+
+    AppController.prototype.onFileRenamed.call(app, {
+      detail: { oldPath: "docs", newPath: "archive", type: "folder" }
+    })
+
+    expect(app.currentFile).toBe("archive/foo.md")
+    expect(autosave.renameFile).toHaveBeenCalledWith("docs", "archive", "folder")
+  })
+
+  it("clears autosave when the active file is deleted", () => {
+    const autosave = { deleteFile: vi.fn() }
+    const app = {
+      currentFile: "foo.md",
+      getAutosaveController: () => autosave,
+      updatePathDisplay: vi.fn(),
+      editorPlaceholderTarget: { classList: { remove: vi.fn() } },
+      editorTarget: { classList: { add: vi.fn() } },
+      hideStatsPanel: vi.fn()
+    }
+
+    AppController.prototype.onFileDeleted.call(app, {
+      detail: { path: "foo.md", type: "file" }
+    })
+
+    expect(app.currentFile).toBeNull()
+    expect(autosave.deleteFile).toHaveBeenCalledWith("foo.md", "file")
   })
 })

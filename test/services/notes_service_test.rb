@@ -156,6 +156,21 @@ class NotesServiceTest < ActiveSupport::TestCase
     assert_equal "New content", File.read(@test_notes_dir.join("existing.md"))
   end
 
+  test "update overwrites an existing file" do
+    create_test_note("existing.md", "Old content")
+
+    @service.update("existing.md", "New content")
+    assert_equal "New content", File.read(@test_notes_dir.join("existing.md"))
+  end
+
+  test "update raises NotFoundError without creating a missing file or folder" do
+    assert_raises(NotesService::NotFoundError) do
+      @service.update("missing/folder/note.md", "stale content")
+    end
+
+    refute @test_notes_dir.join("missing").exist?
+  end
+
   test "write creates parent directories" do
     @service.write("deep/nested/note.md", "Content")
 

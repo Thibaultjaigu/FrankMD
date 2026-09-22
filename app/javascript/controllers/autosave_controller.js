@@ -20,6 +20,7 @@ export default class extends Controller {
     this._isSaving = false
     this._lastSavedContent = null
     this._lastSaveTime = 0
+    this._fileVersion = 0
     this._contentLossWarningActive = false
     this._contentLossOverride = false
     this._offlineBackupTimeout = null
@@ -43,6 +44,74 @@ export default class extends Controller {
     this.currentFile = path
     this._lastSavedContent = content
     this.hasUnsavedChanges = false
+    this._fileVersion += 1
+  }
+
+  // Keep autosave attached to a note when its path changes without loading it
+  // as a new file. In particular, do not reset the dirty state here: a rename
+  // must not make pending editor changes look persisted.
+  renameFile(oldPath, newPath, type = "file") {
+    const remappedPath = this.remapPath(this.currentFile, oldPath, newPath, type)
+    if (remappedPath === this.currentFile) return false
+
+    this.currentFile = remappedPath
+    this._fileVersion += 1
+    return true
+  }
+
+  // Invalidate all autosave state for a deleted note. A save already in flight
+  // cannot be cancelled reliably, so saveNow() also verifies its captured file
+  // version before applying a response.
+  deleteFile(path, type = "file") {
+    if (!this.pathMatches(this.currentFile, path, type)) return false
+
+    const backupController = this.getOfflineBackupController()
+    if (backupController) backupController.clear(this.currentFile)
+
+    this.clearPendingTimers()
+    this.currentFile = null
+    this._lastSavedContent = null
+    this.hasUnsavedChanges = false
+    this._fileVersion += 1
+    this.dismissContentLossWarning()
+    this.showSaveStatus("")
+    return true
+  }
+
+  remapPath(path, oldPath, newPath, type = "file") {
+    if (!path) return path
+
+    if (type === "folder") {
+      if (path === oldPath || path.startsWith(`${oldPath}/`)) {
+        return `${newPath}${path.slice(oldPath.length)}`
+      }
+      return path
+    }
+
+    return path === oldPath ? newPath : path
+  }
+
+  pathMatches(path, targetPath, type = "file") {
+    if (!path) return false
+    if (type === "folder") {
+      return path === targetPath || path.startsWith(`${targetPath}/`)
+    }
+    return path === targetPath
+  }
+
+  clearPendingTimers() {
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout)
+      this.saveTimeout = null
+    }
+    if (this.saveMaxIntervalTimeout) {
+      clearTimeout(this.saveMaxIntervalTimeout)
+      this.saveMaxIntervalTimeout = null
+    }
+    if (this._offlineBackupTimeout) {
+      clearTimeout(this._offlineBackupTimeout)
+      this._offlineBackupTimeout = null
+    }
   }
 
   checkOfflineBackup(serverContent) {
@@ -130,18 +199,13 @@ export default class extends Controller {
     if (!this.currentFile) return
     if (this._isSaving) return
 
-    if (this.saveTimeout) {
-      clearTimeout(this.saveTimeout)
-      this.saveTimeout = null
-    }
-    if (this.saveMaxIntervalTimeout) {
-      clearTimeout(this.saveMaxIntervalTimeout)
-      this.saveMaxIntervalTimeout = null
-    }
+    const filePath = this.currentFile
+    const fileVersion = this._fileVersion
+    this.clearPendingTimers()
 
     const codemirrorController = this.getCodemirrorController()
     const content = codemirrorController ? codemirrorController.getValue() : ""
-    const isConfigFile = this.currentFile === ".fed"
+    const isConfigFile = filePath === ".fed"
 
     if (content === this._lastSavedContent) {
       this.hasUnsavedChanges = false
@@ -161,7 +225,7 @@ export default class extends Controller {
 
     this._isSaving = true
     try {
-      const response = await patch(`/notes/${encodePath(this.currentFile)}`, {
+      const response = await patch(`/notes/${encodePath(filePath)}`, {
         body: { content },
         responseKind: "json"
       })
@@ -170,12 +234,19 @@ export default class extends Controller {
         throw new Error(window.t("errors.failed_to_save"))
       }
 
+      // A rename, delete, or file load may have happened while the request was
+      // in flight. Do not let the old response change state for the new file.
+      if (this.currentFile !== filePath || this._fileVersion !== fileVersion) {
+        if (this.currentFile && this.hasUnsavedChanges) this.scheduleAutoSave()
+        return
+      }
+
       this._lastSavedContent = content
       this._lastSaveTime = Date.now()
       this._contentLossOverride = false
       this.hasUnsavedChanges = false
       const backupController = this.getOfflineBackupController()
-      if (backupController) backupController.clear(this.currentFile)
+      if (backupController) backupController.clear(filePath)
       this.showSaveStatus(window.t("status.saved"))
       setTimeout(() => this.showSaveStatus(""), 2000)
 
@@ -191,8 +262,12 @@ export default class extends Controller {
         }
       }
     } catch (error) {
-      console.error("Error saving:", error)
-      this.showSaveStatus(window.t("status.error_saving"), true)
+      if (this.currentFile !== filePath || this._fileVersion !== fileVersion) {
+        if (this.currentFile && this.hasUnsavedChanges) this.scheduleAutoSave()
+      } else {
+        console.error("Error saving:", error)
+        this.showSaveStatus(window.t("status.error_saving"), true)
+      }
     } finally {
       this._isSaving = false
     }
