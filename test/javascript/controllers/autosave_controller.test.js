@@ -664,6 +664,31 @@ describe("AutosaveController — Content Loss Detection", () => {
       expect(draftStorage.readDraft("test.md").draft).toMatchObject({ content: "backup content", baseRevision: "server-revision" })
       expect(localStorage.getItem("frankmd:backup:test.md")).toBeNull()
     })
+
+    it("consumes an accepted legacy backup and does not offer it again", () => {
+      controller.setFile("test.md", "server content", "server-revision")
+      const timestamp = Date.now()
+      const backup = { content: "backup content", timestamp }
+      localStorage.setItem("frankmd:backup:test.md", JSON.stringify(backup))
+
+      const recoveryElement = container.querySelector('[data-controller~="recovery-diff"]')
+      const recoveryController = application.getControllerForElementAndIdentifier(recoveryElement, "recovery-diff")
+      controller.getRecoveryDiffController = () => recoveryController
+      expect(controller.recoverDraft("server content", "server-revision")).toBe("server content")
+      const dialog = recoveryElement.querySelector("dialog")
+      expect(dialog.showModal).toHaveBeenCalledTimes(1)
+
+      recoveryController.acceptBackup()
+
+      expect(localStorage.getItem("frankmd:backup:test.md")).toBeNull()
+      expect(draftStorage.readDraft("test.md").draft).toMatchObject({
+        content: "backup content",
+        baseRevision: "server-revision"
+      })
+
+      expect(controller.recoverDraft("server content", "server-revision")).toBe("backup content")
+      expect(dialog.showModal).toHaveBeenCalledTimes(1)
+    })
   })
 
   describe("offline → in-flight save → online flow", () => {

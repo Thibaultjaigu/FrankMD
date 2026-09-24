@@ -162,6 +162,7 @@ describe("RecoveryDiffController", () => {
           source: "backup",
           path: "test.md",
           content: "my backup content",
+          backupContent: "my backup content",
           draftRevision: null,
           backupTimestamp: timestamp
         }

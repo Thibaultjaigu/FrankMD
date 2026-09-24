@@ -47,6 +47,7 @@ export default class extends Controller {
         source: this._source,
         path: this._path,
         content: this._backupContent,
+        backupContent: this._backupContent,
         draftRevision: this._draftRevision,
         backupTimestamp: this._backupTimestamp
       }
