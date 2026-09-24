@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "digest"
+
 class Note
   include ActiveModel::Model
   include ActiveModel::Attributes
@@ -66,6 +68,12 @@ class Note
 
   def read
     service.read(normalized_path)
+  end
+
+  # A content identity that remains stable across reads without relying on
+  # filesystem timestamps or size, neither of which uniquely identify content.
+  def revision
+    Digest::SHA256.hexdigest(content.to_s)
   end
 
   def save(existing_only: false)

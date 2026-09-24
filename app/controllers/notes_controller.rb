@@ -35,7 +35,7 @@ class NotesController < ApplicationController
     if json_request?
       begin
         note = Note.find(path)
-        render json: { path: note.path, content: note.content }
+        render json: { path: note.path, content: note.content, revision: note.revision }
       rescue NotesService::NotFoundError
         render json: { error: t("errors.note_not_found") }, status: :not_found
       end
@@ -94,7 +94,7 @@ class NotesController < ApplicationController
     @note.content = params[:content] || ""
 
     if @note.save(existing_only: true)
-      render json: { path: @note.path, message: t("success.note_saved") }
+      render json: { path: @note.path, message: t("success.note_saved"), revision: @note.revision }
     else
       status = @note.errors[:base].include?(t("errors.note_not_found")) ? :not_found : :unprocessable_entity
       render json: { error: @note.errors.full_messages.join(", ") }, status: status
@@ -200,9 +200,12 @@ class NotesController < ApplicationController
     note = Note.new(path: path)
 
     if note.exists?
+      content = note.read
+      note.content = content
       {
         path: note.path,
-        content: note.read,
+        content: content,
+        revision: note.revision,
         exists: true
       }
     else

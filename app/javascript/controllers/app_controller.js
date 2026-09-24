@@ -208,7 +208,7 @@ export default class extends Controller {
     // Check if server provided initial note data (from URL like /notes/path/to/file.md)
     const initialNote = this.hasInitialNoteValue ? this.initialNoteValue : null
     if (initialNote && Object.keys(initialNote).length > 0) {
-      const { path, content, exists, error } = initialNote
+      const { path, content, revision, exists, error } = initialNote
 
       if (exists && content !== null) {
         // File exists - load it directly from server-provided data
@@ -217,7 +217,7 @@ export default class extends Controller {
         const displayPath = fileType === "markdown" ? path.replace(/\.md$/, "") : path
         this.updatePathDisplay(displayPath)
         this.expandParentFolders(path)
-        this.showEditor(content, fileType)
+        this.showEditor(content, fileType, revision)
         this.refreshTree()
         return
       }
@@ -410,7 +410,7 @@ export default class extends Controller {
       // Expand parent folders in tree
       this.expandParentFolders(path)
 
-      this.showEditor(data.content, fileType)
+      this.showEditor(data.content, fileType, data.revision)
       this.refreshTree()
 
       // Update URL for bookmarkability
@@ -424,7 +424,7 @@ export default class extends Controller {
     }
   }
 
-  showEditor(content, fileType = "markdown") {
+  showEditor(content, fileType = "markdown", revision = null) {
     this.currentFileType = fileType
     this.editorPlaceholderTarget.classList.add("hidden")
     this.editorTarget.classList.remove("hidden")
@@ -438,20 +438,29 @@ export default class extends Controller {
 
     // Delegate persistence tracking to autosave controller
     const autosave = this.getAutosaveController()
+    let editorContent = content
     if (autosave) {
-      autosave.setFile(this.currentFile, content)
-      autosave.checkOfflineBackup(content)
+      autosave.setFile(this.currentFile, content, revision)
+      if (autosave.recoverDraft) {
+        editorContent = autosave.recoverDraft(content, revision)
+      } else {
+        autosave.checkOfflineBackup(content)
+      }
     }
 
     // Set content via CodeMirror controller
     const codemirrorController = this.getCodemirrorController()
     if (codemirrorController) {
-      codemirrorController.setValue(content)
+      codemirrorController.setValue(editorContent)
       codemirrorController.focus()
     } else {
       // Fallback to hidden textarea
-      this.textareaTarget.value = content
+      this.textareaTarget.value = editorContent
     }
+
+    // Applying a recovered draft can be a programmatic editor change. Ensure
+    // it remains queued for autosave even when CodeMirror sees no text delta.
+    if (autosave && editorContent !== content) autosave.scheduleAutoSave()
 
     // Only show toolbar and preview for markdown files
     const isMarkdown = fileType === "markdown"

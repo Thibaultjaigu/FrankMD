@@ -105,6 +105,7 @@ ko:
     saved: "저장됨"
     unsaved: "저장되지 않은 변경사항"
     error_saving: "저장 오류"
+    draft_storage_error: "로컬 초안을 저장할 수 없습니다"
     error_loading: "노트 로드 오류"
     searching: "검색 중..."
     no_matches: "일치하는 항목 없음"

@@ -1,0 +1,52 @@
+# frozen_string_literal: true
+
+require "application_system_test_case"
+
+class DraftRecoveryTest < ApplicationSystemTestCase
+  test "restores an online unsaved draft after a hard reload" do
+    server_content = "# Original note"
+    create_test_note("draft.md", server_content)
+
+    visit note_url(path: "draft.md")
+    assert_equal server_content, editor_content
+
+    page.execute_script(<<~JS)
+      const root = document.querySelector('[data-controller~="app"]')
+      const app = window.Stimulus.getControllerForElementAndIdentifier(root, "app")
+      const autosave = app.getAutosaveController()
+      autosave.constructor.SAVE_DEBOUNCE_MS = 60000
+      app.getCodemirrorController().setValue("# Local draft")
+    JS
+
+    draft_json = wait_for_browser_draft("draft.md")
+    assert_equal "# Local draft", JSON.parse(draft_json)["content"]
+    assert_equal server_content, @test_notes_dir.join("draft.md").read
+
+    page.refresh
+    assert_equal "# Local draft", wait_for_editor_content("# Local draft")
+  end
+
+  private
+
+  def wait_for_browser_draft(path)
+    key = "frankmd:draft:#{ERB::Util.url_encode(path)}"
+    wait_until { page.evaluate_script("localStorage.getItem(#{key.to_json})") }
+  end
+
+  def wait_for_editor_content(expected)
+    wait_until do
+      value = editor_content
+      value == expected ? value : nil
+    end
+  end
+
+  def wait_until
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + Capybara.default_max_wait_time
+    loop do
+      value = yield
+      return value if value
+      raise "Timed out waiting for browser state" if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+      sleep 0.05
+    end
+  end
+end

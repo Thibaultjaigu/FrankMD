@@ -100,18 +100,26 @@ describe("RecoveryDiffController", () => {
     it("dispatches resolved event with source server and closes dialog", () => {
       const dialog = container.querySelector("dialog")
       const dispatchSpy = vi.spyOn(controller, "dispatch")
+      const timestamp = Date.now()
 
       controller.open({
         path: "test.md",
         serverContent: "server",
         backupContent: "backup",
-        backupTimestamp: Date.now()
+        backupTimestamp: timestamp,
+        draftRevision: "draft-1"
       })
 
       controller.acceptServer()
 
       expect(dispatchSpy).toHaveBeenCalledWith("resolved", {
-        detail: { source: "server" }
+        detail: {
+          source: "server",
+          path: "test.md",
+          draftRevision: "draft-1",
+          backupContent: "backup",
+          backupTimestamp: timestamp
+        }
       })
       expect(dialog.close).toHaveBeenCalled()
     })
@@ -121,18 +129,25 @@ describe("RecoveryDiffController", () => {
     it("dispatches resolved event with source backup and content, then closes", () => {
       const dialog = container.querySelector("dialog")
       const dispatchSpy = vi.spyOn(controller, "dispatch")
+      const timestamp = Date.now()
 
       controller.open({
         path: "test.md",
         serverContent: "server",
         backupContent: "my backup content",
-        backupTimestamp: Date.now()
+        backupTimestamp: timestamp
       })
 
       controller.acceptBackup()
 
       expect(dispatchSpy).toHaveBeenCalledWith("resolved", {
-        detail: { source: "backup", content: "my backup content" }
+        detail: {
+          source: "backup",
+          path: "test.md",
+          content: "my backup content",
+          draftRevision: null,
+          backupTimestamp: timestamp
+        }
       })
       expect(dialog.close).toHaveBeenCalled()
     })

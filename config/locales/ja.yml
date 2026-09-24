@@ -105,6 +105,7 @@ ja:
     saved: "保存済み"
     unsaved: "未保存の変更"
     error_saving: "保存エラー"
+    draft_storage_error: "ローカル下書きを保存できません"
     error_loading: "ノートの読み込みエラー"
     searching: "検索中..."
     no_matches: "一致するものが見つかりません"

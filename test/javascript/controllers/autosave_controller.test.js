@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { Application } from "@hotwired/stimulus"
+import draftStorage from "../../../app/javascript/lib/draft_storage"
 
 // Mock @codemirror/commands before importing the controller
 vi.mock("@codemirror/commands", () => ({
@@ -10,6 +11,20 @@ vi.mock("@codemirror/commands", () => ({
 }))
 
 import AutosaveController from "../../../app/javascript/controllers/autosave_controller"
+
+function ensureLocalStorage() {
+  if (typeof globalThis.localStorage !== "undefined" && typeof globalThis.localStorage.clear === "function") return
+
+  const values = new Map()
+  globalThis.localStorage = {
+    getItem: (key) => values.has(key) ? values.get(key) : null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key),
+    clear: () => values.clear(),
+    get length() { return values.size },
+    key: (index) => Array.from(values.keys())[index] ?? null
+  }
+}
 
 describe("AutosaveController — Content Loss Detection", () => {
   let application
@@ -25,6 +40,7 @@ describe("AutosaveController — Content Loss Detection", () => {
   }
 
   beforeEach(async () => {
+    ensureLocalStorage()
     // Mock fetch
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -59,9 +75,11 @@ describe("AutosaveController — Content Loss Detection", () => {
     mockCodemirrorValue = ""
     mockCodemirrorController.setValue.mockClear()
     global.fetch.mockClear()
+    localStorage.clear()
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     // Clear all timeouts
     if (controller) {
       if (controller.saveTimeout) clearTimeout(controller.saveTimeout)
@@ -71,6 +89,7 @@ describe("AutosaveController — Content Loss Detection", () => {
     vi.restoreAllMocks()
     application.stop()
     document.body.innerHTML = ""
+    localStorage.clear()
   })
 
   // Helper to generate a string of a given length
@@ -160,6 +179,158 @@ describe("AutosaveController — Content Loss Detection", () => {
       expect(controller.saveTimeout).toBeNull()
       // But unsaved changes should be tracked
       expect(controller.hasUnsavedChanges).toBe(true)
+    })
+  })
+
+  describe("online draft persistence and recovery", () => {
+    it("debounces an online empty draft and stores it independently by path", async () => {
+      vi.useFakeTimers()
+      controller.setFile("empty.md", "server content", "server-revision")
+      mockCodemirrorValue = ""
+
+      controller.scheduleAutoSave()
+      await vi.advanceTimersByTimeAsync(AutosaveController.DRAFT_DEBOUNCE_MS)
+
+      expect(draftStorage.readDraft("empty.md")).toMatchObject({
+        ok: true,
+        draft: { path: "empty.md", content: "", baseRevision: "server-revision" }
+      })
+    })
+
+    it("keeps pending snapshots for different files independent", async () => {
+      vi.useFakeTimers()
+      controller.setFile("first.md", "first server", "first-revision")
+      mockCodemirrorValue = "first draft"
+      controller.scheduleDraftWrite()
+
+      controller.setFile("second.md", "second server", "second-revision")
+      mockCodemirrorValue = "second draft"
+      controller.scheduleDraftWrite()
+      await vi.advanceTimersByTimeAsync(AutosaveController.DRAFT_DEBOUNCE_MS)
+
+      expect(draftStorage.readDraft("first.md").draft).toMatchObject({ content: "first draft", baseRevision: "first-revision" })
+      expect(draftStorage.readDraft("second.md").draft).toMatchObject({ content: "second draft", baseRevision: "second-revision" })
+    })
+
+    it("automatically restores a draft when its server baseline still matches", () => {
+      draftStorage.writeDraft("test.md", "local draft", "same-baseline")
+      controller.setFile("test.md", "server version", "same-baseline")
+
+      expect(controller.recoverDraft("server version", "same-baseline")).toBe("local draft")
+      expect(controller.hasUnsavedChanges).toBe(true)
+    })
+
+    it("clears a draft when the server already contains its content", () => {
+      const write = draftStorage.writeDraft("test.md", "already saved", "old-baseline")
+      controller.setFile("test.md", "already saved", "current-baseline")
+
+      expect(controller.recoverDraft("already saved", "current-baseline")).toBe("already saved")
+      expect(draftStorage.removeDraftIfRevision("test.md", write.draft.draftRevision)).toEqual({ ok: true, removed: false })
+      expect(draftStorage.readDraft("test.md").draft).toBeNull()
+    })
+
+    it("preserves and opens a diverged draft in the recovery workflow", () => {
+      const write = draftStorage.writeDraft("test.md", "local draft", "old-baseline")
+      const recovery = { open: vi.fn() }
+      controller.getRecoveryDiffController = () => recovery
+      controller.setFile("test.md", "different server version", "new-baseline")
+
+      expect(controller.recoverDraft("different server version", "new-baseline")).toBe("different server version")
+      expect(recovery.open).toHaveBeenCalledWith({
+        path: "test.md",
+        serverContent: "different server version",
+        backupContent: "local draft",
+        backupTimestamp: write.draft.updatedAt,
+        source: "draft",
+        draftRevision: write.draft.draftRevision
+      })
+      expect(draftStorage.readDraft("test.md").draft.draftRevision).toBe(write.draft.draftRevision)
+    })
+
+    it("prefers a draft over a stale legacy backup and removes the superseded backup", () => {
+      const write = draftStorage.writeDraft("test.md", "new draft", "baseline")
+      localStorage.setItem("frankmd:backup:test.md", JSON.stringify({ content: "old backup", timestamp: write.draft.updatedAt - 1 }))
+      controller.setFile("test.md", "server", "baseline")
+
+      expect(controller.recoverDraft("server", "baseline")).toBe("new draft")
+      expect(localStorage.getItem("frankmd:backup:test.md")).toBeNull()
+    })
+
+    it("opens a newer, different legacy backup for an explicit recovery choice", () => {
+      const write = draftStorage.writeDraft("test.md", "draft", "baseline")
+      const backup = { content: "newer backup", timestamp: write.draft.updatedAt + 1 }
+      localStorage.setItem("frankmd:backup:test.md", JSON.stringify(backup))
+      const recovery = { open: vi.fn() }
+      controller.getRecoveryDiffController = () => recovery
+      controller.setFile("test.md", "server", "baseline")
+
+      controller.recoverDraft("server", "baseline")
+
+      expect(recovery.open).toHaveBeenCalledWith({
+        path: "test.md",
+        serverContent: "server",
+        backupContent: "newer backup",
+        backupTimestamp: backup.timestamp,
+        source: "backup",
+        draftRevision: write.draft.draftRevision
+      })
+      expect(draftStorage.readDraft("test.md").draft.draftRevision).toBe(write.draft.draftRevision)
+    })
+
+    it("reports draft storage failures through the save status", async () => {
+      vi.useFakeTimers()
+      const error = new Error("storage unavailable")
+      vi.spyOn(draftStorage, "writeDraft").mockReturnValue({ ok: false, error })
+      window.t.mockImplementation((key) => key)
+      vi.spyOn(console, "error").mockImplementation(() => {})
+      controller.setFile("test.md", "server", "baseline")
+      mockCodemirrorValue = "local edit"
+
+      controller.scheduleDraftWrite()
+      await vi.advanceTimersByTimeAsync(AutosaveController.DRAFT_DEBOUNCE_MS)
+
+      expect(controller.saveStatusTarget.textContent).toBe("status.draft_storage_error")
+      expect(controller.saveStatusTarget.classList.contains("text-red-500")).toBe(true)
+    })
+
+    it("restores an explicitly selected empty draft", () => {
+      const write = draftStorage.writeDraft("test.md", "", "old-baseline")
+      controller.setFile("test.md", "server content", "current-baseline")
+
+      controller.onRecoveryResolved({
+        detail: { source: "draft", content: "", draftRevision: write.draft.draftRevision }
+      })
+
+      expect(mockCodemirrorController.setValue).toHaveBeenCalledWith("")
+      expect(draftStorage.readDraft("test.md").draft).toMatchObject({ content: "", baseRevision: "current-baseline" })
+    })
+
+    it("keeps a newer draft when an earlier save completes", async () => {
+      controller.setFile("test.md", "server", "baseline")
+      mockCodemirrorValue = "saved snapshot"
+
+      let resolveFetch
+      global.fetch.mockImplementation(() => new Promise((resolve) => { resolveFetch = resolve }))
+      const savePromise = controller.saveNow()
+      await vi.waitFor(() => expect(resolveFetch).toBeDefined())
+
+      const sentDraft = draftStorage.readDraft("test.md").draft
+      mockCodemirrorValue = "newer edit"
+      controller.scheduleDraftWrite()
+      await new Promise((resolve) => setTimeout(resolve, AutosaveController.DRAFT_DEBOUNCE_MS + 20))
+      const newerDraft = draftStorage.readDraft("test.md").draft
+      expect(newerDraft.draftRevision).not.toBe(sentDraft.draftRevision)
+
+      resolveFetch({
+        ok: true,
+        json: () => Promise.resolve({ revision: "saved-revision" })
+      })
+      await savePromise
+
+      expect(draftStorage.readDraft("test.md").draft).toMatchObject({
+        content: "newer edit",
+        baseRevision: "saved-revision"
+      })
     })
   })
 
@@ -431,18 +602,25 @@ describe("AutosaveController — Content Loss Detection", () => {
     })
 
     it("onRecoveryResolved with 'backup' sets editor content and marks unsaved", () => {
-      controller.currentFile = "test.md"
-      controller._lastSavedContent = "server content"
+      controller.setFile("test.md", "server content", "server-revision")
       controller.hasUnsavedChanges = false
+      const timestamp = Date.now()
+      localStorage.setItem("frankmd:backup:test.md", JSON.stringify({ content: "backup content", timestamp }))
 
       controller.onRecoveryResolved({
-        detail: { source: "backup", content: "backup content" }
+        detail: {
+          source: "backup",
+          content: "backup content",
+          backupContent: "backup content",
+          backupTimestamp: timestamp
+        }
       })
 
-      expect(mockBackupController.clear).toHaveBeenCalledWith("test.md")
       expect(mockCodemirrorController.setValue).toHaveBeenCalledWith("backup content")
-      expect(controller._lastSavedContent).toBeNull()
+      expect(controller._lastSavedContent).toBe("server content")
       expect(controller.hasUnsavedChanges).toBe(true)
+      expect(draftStorage.readDraft("test.md").draft).toMatchObject({ content: "backup content", baseRevision: "server-revision" })
+      expect(localStorage.getItem("frankmd:backup:test.md")).toBeNull()
     })
   })
 

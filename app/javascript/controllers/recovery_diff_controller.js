@@ -5,9 +5,12 @@ import { escapeHtml } from "lib/text_utils"
 export default class extends Controller {
   static targets = ["dialog", "serverText", "backupText", "backupTimestamp"]
 
-  open({ path, serverContent, backupContent, backupTimestamp }) {
+  open({ path, serverContent, backupContent, backupTimestamp, source = "backup", draftRevision = null }) {
     this._path = path
     this._backupContent = backupContent
+    this._backupTimestamp = backupTimestamp
+    this._source = source
+    this._draftRevision = draftRevision
 
     const diff = computeWordDiff(serverContent, backupContent)
     this.serverTextTarget.innerHTML = this.renderDiffOriginal(diff)
@@ -22,12 +25,28 @@ export default class extends Controller {
   }
 
   acceptServer() {
-    this.dispatch("resolved", { detail: { source: "server" } })
+    this.dispatch("resolved", {
+      detail: {
+        source: "server",
+        path: this._path,
+        draftRevision: this._draftRevision,
+        backupContent: this._backupContent,
+        backupTimestamp: this._backupTimestamp
+      }
+    })
     this.dialogTarget.close()
   }
 
   acceptBackup() {
-    this.dispatch("resolved", { detail: { source: "backup", content: this._backupContent } })
+    this.dispatch("resolved", {
+      detail: {
+        source: this._source,
+        path: this._path,
+        content: this._backupContent,
+        draftRevision: this._draftRevision,
+        backupTimestamp: this._backupTimestamp
+      }
+    })
     this.dialogTarget.close()
   }
 

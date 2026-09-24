@@ -1,45 +1,38 @@
 import { Controller } from "@hotwired/stimulus"
+import draftStorage from "lib/draft_storage"
 
 export default class extends Controller {
-  static STORAGE_PREFIX = "frankmd:backup:"
-
   save(path, content) {
-    const key = this.constructor.STORAGE_PREFIX + path
-    try {
-      localStorage.setItem(key, JSON.stringify({ content, timestamp: Date.now() }))
-    } catch (e) {
-      console.warn("localStorage backup failed:", e)
-    }
+    const result = draftStorage.writeBackup(path, content)
+    if (!result.ok) console.warn("localStorage backup failed:", result.error)
+    return result
   }
 
   check(path, serverContent) {
-    const key = this.constructor.STORAGE_PREFIX + path
-    const raw = localStorage.getItem(key)
-    if (!raw) return null
-    try {
-      const data = JSON.parse(raw)
-      if (data.content === serverContent) {
-        this.clear(path)
-        return null
-      }
-      return data
-    } catch {
+    const result = draftStorage.readBackup(path)
+    if (!result.ok) {
+      console.warn("localStorage backup read failed:", result.error)
+      return null
+    }
+
+    const backup = result.backup
+    if (!backup) return null
+    if (backup.content === serverContent) {
       this.clear(path)
       return null
     }
+    return backup
   }
 
   clear(path) {
-    localStorage.removeItem(this.constructor.STORAGE_PREFIX + path)
+    const result = draftStorage.removeBackup(path)
+    if (!result.ok) console.warn("localStorage backup removal failed:", result.error)
+    return result
   }
 
   clearAll() {
-    const prefix = this.constructor.STORAGE_PREFIX
-    const keys = []
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i)
-      if (key.startsWith(prefix)) keys.push(key)
-    }
-    keys.forEach(k => localStorage.removeItem(k))
+    const result = draftStorage.removeAllBackups()
+    if (!result.ok) console.warn("localStorage backup removal failed:", result.error)
+    return result
   }
 }

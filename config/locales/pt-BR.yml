@@ -106,6 +106,7 @@ pt-BR:
     saved: "Salvo"
     unsaved: "Alterações não salvas"
     error_saving: "Erro ao salvar"
+    draft_storage_error: "Não foi possível salvar o rascunho local"
     error_loading: "Erro ao carregar nota"
     searching: "Buscando..."
     no_matches: "Nenhum resultado encontrado"
