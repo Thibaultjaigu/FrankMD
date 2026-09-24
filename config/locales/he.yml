@@ -102,7 +102,7 @@ he:
     saved: "נשמר"
     unsaved: "שינויים לא שמורים"
     error_saving: "שגיאה בשמירה"
-    draft_storage_error: "לא ניתן לשמור טיוטה מקומית"
+    draft_storage_error: "לא ניתן לשמור טיוטה מקומית. השאר את הדף פתוח ונסה שוב לפני היציאה."
     error_loading: "שגיאה בטעינת הערה"
     searching: "מחפש..."
     no_matches: "לא נמצאו תוצאות"

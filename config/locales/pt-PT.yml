@@ -105,7 +105,7 @@ pt-PT:
     saved: "Guardado"
     unsaved: "Alterações por guardar"
     error_saving: "Erro ao guardar"
-    draft_storage_error: "Não foi possível guardar o rascunho local"
+    draft_storage_error: "Não foi possível guardar o rascunho local. Mantenha esta página aberta e tente novamente antes de sair."
     error_loading: "Erro ao carregar nota"
     searching: "A pesquisar..."
     no_matches: "Nenhum resultado encontrado"

@@ -65,15 +65,17 @@ class DraftRecoveryTest < ApplicationSystemTestCase
       const app = window.Stimulus.getControllerForElementAndIdentifier(root, "app")
       const autosave = app.getAutosaveController()
       autosave.constructor.SAVE_DEBOUNCE_MS = 60000
+      autosave.constructor.DRAFT_DEBOUNCE_MS = 60000
       app.getCodemirrorController().setValue("# Local draft")
     JS
 
-    draft_json = wait_for_browser_draft("draft.md")
-    assert_equal "# Local draft", JSON.parse(draft_json)["content"]
+    key = "frankmd:draft:#{ERB::Util.url_encode('draft.md')}"
+    assert_nil page.evaluate_script("localStorage.getItem(#{key.to_json})")
     assert_equal server_content, @test_notes_dir.join("draft.md").read
 
     page.refresh
     assert_equal "# Local draft", wait_for_editor_content("# Local draft")
+    assert_equal server_content, @test_notes_dir.join("draft.md").read
   end
 
   private

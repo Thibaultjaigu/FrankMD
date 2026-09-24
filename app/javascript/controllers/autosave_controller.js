@@ -23,8 +23,15 @@ export default class extends Controller {
     this._lastSavedContent = null
     this._lastSaveTime = 0
     this._fileVersion = 0
-    this._contentLossWarningActive = false
-    this._contentLossOverride = false
+    this._contentLossState = {
+      path: null,
+      baseRevision: null,
+      warningActive: false,
+      override: false,
+      overrideContent: null
+    }
+    this._draftPersistenceFailures = new Set()
+    this._draftStorageErrorVisible = false
     this._offlineBackupTimeout = null
     this._draftWriteTimeouts = new Map()
     this._knownBaseRevisions = new Map()
@@ -32,9 +39,22 @@ export default class extends Controller {
     this._draftRevision = null
     this._saveScheduleGeneration = 0
     this._scheduledSaveSnapshot = null
+
+    this._visibilityChangeHandler = this.handleVisibilityChange.bind(this)
+    this._pageHideHandler = this.handlePageHide.bind(this)
+    this._beforeUnloadHandler = this.handleBeforeUnload.bind(this)
+    this._beforeUnloadListenerActive = false
+    document.addEventListener("visibilitychange", this._visibilityChangeHandler)
+    window.addEventListener("pagehide", this._pageHideHandler)
   }
 
   disconnect() {
+    document.removeEventListener("visibilitychange", this._visibilityChangeHandler)
+    window.removeEventListener("pagehide", this._pageHideHandler)
+    if (this._beforeUnloadListenerActive) {
+      window.removeEventListener("beforeunload", this._beforeUnloadHandler)
+      this._beforeUnloadListenerActive = false
+    }
     if (this.saveTimeout) clearTimeout(this.saveTimeout)
     if (this.saveMaxIntervalTimeout) clearTimeout(this.saveMaxIntervalTimeout)
     if (this._offlineBackupTimeout) clearTimeout(this._offlineBackupTimeout)
@@ -50,14 +70,56 @@ export default class extends Controller {
 
   // === Public API (called by app controller) ===
 
+  currentContentLossState() {
+    if (!this._contentLossState ||
+      this._contentLossState.path !== this.currentFile ||
+      this._contentLossState.baseRevision !== this._baseRevision) {
+      this._contentLossState = {
+        path: this.currentFile,
+        baseRevision: this._baseRevision,
+        warningActive: false,
+        override: false,
+        overrideContent: null
+      }
+    }
+    return this._contentLossState
+  }
+
+  get _contentLossWarningActive() {
+    return this.currentContentLossState().warningActive
+  }
+
+  set _contentLossWarningActive(value) {
+    this.currentContentLossState().warningActive = Boolean(value)
+  }
+
+  get _contentLossOverride() {
+    return this.currentContentLossState().override
+  }
+
+  set _contentLossOverride(value) {
+    const state = this.currentContentLossState()
+    state.override = Boolean(value)
+    state.overrideContent = value ? (this.getCodemirrorController()?.getValue() ?? null) : null
+  }
+
   setFile(path, content, revision = null) {
+    this.dismissContentLossWarning()
     this.currentFile = path
     this._lastSavedContent = content
     this._baseRevision = typeof revision === "string" && revision ? revision : null
+    this._contentLossState = {
+      path,
+      baseRevision: this._baseRevision,
+      warningActive: false,
+      override: false,
+      overrideContent: null
+    }
     this._draftRevision = null
     if (this._baseRevision) this._knownBaseRevisions.set(path, this._baseRevision)
     this.hasUnsavedChanges = false
     this._fileVersion += 1
+    this.updateBeforeUnloadListener()
   }
 
   prepareForTransition() {
@@ -71,6 +133,8 @@ export default class extends Controller {
     const content = codemirrorController ? codemirrorController.getValue() : ""
     if (content !== this._lastSavedContent && !this._baseRevision) {
       const error = new Error("Cannot persist the outgoing draft without a server revision")
+      this._draftPersistenceFailures.add(path)
+      this.updateBeforeUnloadListener()
       this.showDraftStorageError(error)
       return { ok: false, error }
     }
@@ -94,6 +158,7 @@ export default class extends Controller {
     this._fileVersion += 1
     this.dismissContentLossWarning()
     this.showSaveStatus("")
+    this.updateBeforeUnloadListener()
   }
 
   // Keep autosave attached to a note when its path changes without loading it
@@ -132,6 +197,7 @@ export default class extends Controller {
     this._fileVersion += 1
     this.dismissContentLossWarning()
     this.showSaveStatus("")
+    this.updateBeforeUnloadListener()
     return true
   }
 
@@ -198,20 +264,34 @@ export default class extends Controller {
   }
 
   flushDraftWrite(path = this.currentFile, content = null, baseRevision = this._baseRevision) {
-    if (!path || !baseRevision) return { ok: true, draft: null }
+    if (!path) return { ok: true, draft: null }
 
     const cm = this.getCodemirrorController()
     const snapshotContent = content === null ? (cm ? cm.getValue() : "") : content
     this.clearDraftWriteTimeout(path)
 
     if (snapshotContent === this._lastSavedContent && path === this.currentFile) {
+      this._draftPersistenceFailures.delete(path)
+      this.updateBeforeUnloadListener()
       if (this._draftRevision) {
         const result = draftStorage.removeDraftIfRevision(path, this._draftRevision)
         if (!result.ok) this.showDraftStorageError(result.error)
-        else this._draftRevision = null
+        else {
+          this._draftRevision = null
+          this.clearDraftStorageError()
+        }
         return result
       }
+      this.clearDraftStorageError()
       return { ok: true, draft: null }
+    }
+
+    if (!baseRevision) {
+      const error = new Error("Cannot persist a local draft without a server revision")
+      this._draftPersistenceFailures.add(path)
+      this.updateBeforeUnloadListener()
+      if (path === this.currentFile) this.showDraftStorageError(error)
+      return { ok: false, error }
     }
 
     return this.writeDraftSnapshot({ path, content: snapshotContent, baseRevision })
@@ -223,12 +303,56 @@ export default class extends Controller {
     const result = draftStorage.writeDraft(snapshot.path, snapshot.content, baseRevision)
 
     if (!result.ok) {
+      this._draftPersistenceFailures.add(snapshot.path)
+      this.updateBeforeUnloadListener()
       if (snapshot.path === this.currentFile) this.showDraftStorageError(result.error)
       return result
     }
 
-    if (snapshot.path === this.currentFile) this._draftRevision = result.draft.draftRevision
+    this._draftPersistenceFailures.delete(snapshot.path)
+    this.updateBeforeUnloadListener()
+    if (snapshot.path === this.currentFile) {
+      this._draftRevision = result.draft.draftRevision
+      this.clearDraftStorageError()
+    }
     return result
+  }
+
+  flushActiveDraft() {
+    const path = this.currentFile
+    if (!path) return { ok: true, draft: null }
+
+    const cm = this.getCodemirrorController()
+    const content = cm ? cm.getValue() : ""
+    return this.flushDraftWrite(path, content, this._baseRevision)
+  }
+
+  handleVisibilityChange() {
+    if (document.visibilityState === "hidden" || document.hidden) this.flushActiveDraft()
+  }
+
+  handlePageHide() {
+    this.flushActiveDraft()
+  }
+
+  handleBeforeUnload(event) {
+    const result = this.flushActiveDraft()
+    const path = this.currentFile
+    if (result.ok || !path || !this._draftPersistenceFailures.has(path)) return
+
+    event.preventDefault()
+    event.returnValue = ""
+  }
+
+  updateBeforeUnloadListener() {
+    const shouldListen = Boolean(this.currentFile && this._draftPersistenceFailures.has(this.currentFile))
+    if (shouldListen && !this._beforeUnloadListenerActive) {
+      window.addEventListener("beforeunload", this._beforeUnloadHandler)
+      this._beforeUnloadListenerActive = true
+    } else if (!shouldListen && this._beforeUnloadListenerActive) {
+      window.removeEventListener("beforeunload", this._beforeUnloadHandler)
+      this._beforeUnloadListenerActive = false
+    }
   }
 
   clearDraftWriteTimeout(path) {
@@ -251,8 +375,15 @@ export default class extends Controller {
   }
 
   showDraftStorageError(error) {
+    this._draftStorageErrorVisible = true
     console.error("Unable to persist local draft:", error)
     this.showSaveStatus(window.t("status.draft_storage_error"), true)
+  }
+
+  clearDraftStorageError() {
+    if (!this._draftStorageErrorVisible) return
+    this._draftStorageErrorVisible = false
+    this.showSaveStatus(this.hasUnsavedChanges ? window.t("status.unsaved") : "")
   }
 
   readLegacyBackup(path, serverContent) {
@@ -335,6 +466,7 @@ export default class extends Controller {
       this._draftRevision = draft.draftRevision
       this.hasUnsavedChanges = true
       this.showSaveStatus(window.t("status.unsaved"))
+      if (this.isLargeDeletion(serverContent, draft.content)) this.showContentLossWarning()
       return draft.content
     }
 
@@ -366,14 +498,19 @@ export default class extends Controller {
   }
 
   checkContentRestored(currentContent) {
-    if (!this._contentLossWarningActive || !this._lastSavedContent) return
+    if (!this._contentLossWarningActive || typeof this._lastSavedContent !== "string") return
 
-    const lostChars = this._lastSavedContent.length - currentContent.length
-    const lostPercent = this._lastSavedContent.length > 0 ? lostChars / this._lastSavedContent.length : 0
-
-    if (lostPercent <= 0.2 || lostChars <= 50) {
+    if (!this.isLargeDeletion(this._lastSavedContent, currentContent)) {
       this.dismissContentLossWarning()
     }
+  }
+
+  isLargeDeletion(baseline, content) {
+    if (typeof baseline !== "string" || typeof content !== "string" || baseline.length === 0) return false
+
+    const lostChars = baseline.length - content.length
+    const lostPercent = lostChars / baseline.length
+    return lostPercent > 0.2 && lostChars > 50
   }
 
   // === Offline Backup ===
@@ -483,14 +620,11 @@ export default class extends Controller {
       return
     }
 
-    if (this._lastSavedContent && !this._contentLossOverride) {
-      const lostChars = this._lastSavedContent.length - content.length
-      const lostPercent = lostChars / this._lastSavedContent.length
-
-      if (lostPercent > 0.2 && lostChars > 50) {
-        this.showContentLossWarning()
-        return
-      }
+    const hasContentLossOverride = this._contentLossOverride && this.currentContentLossState().overrideContent === content
+    if (!hasContentLossOverride && this.isLargeDeletion(this._lastSavedContent, content)) {
+      if (!savedDraft.ok) return
+      this.showContentLossWarning()
+      return
     }
 
     this._isSaving = true
@@ -541,7 +675,16 @@ export default class extends Controller {
       }
 
       this._lastSavedContent = content
-      if (newRevision) this._baseRevision = newRevision
+      if (newRevision) {
+        this._baseRevision = newRevision
+        this._contentLossState = {
+          path: filePath,
+          baseRevision: newRevision,
+          warningActive: false,
+          override: false,
+          overrideContent: null
+        }
+      }
       this._lastSaveTime = Date.now()
       this._contentLossOverride = false
       this.hasUnsavedChanges = false
@@ -643,13 +786,15 @@ export default class extends Controller {
         undo(view)
       }
     }
-    this.dismissContentLossWarning()
+    const content = codemirrorController ? codemirrorController.getValue() : ""
+    this.checkContentRestored(content)
+    this.flushDraftWrite(this.currentFile, content, this._baseRevision)
   }
 
   saveAnywayAfterWarning() {
     this.dismissContentLossWarning()
     this._contentLossOverride = true
-    this.saveNow()
+    return this.saveNow()
   }
 
   // === Recovery ===
@@ -692,7 +837,9 @@ export default class extends Controller {
       if (cm) cm.setValue(content)
       this.clearDraftWriteTimeout(path)
       this.hasUnsavedChanges = true
-      this._contentLossOverride = true
+      this._contentLossOverride = false
+
+      const shouldWarnForLargeDeletion = this.isLargeDeletion(this._lastSavedContent, content)
 
       const writeResult = this.flushDraftWrite(path, content, this._baseRevision)
       if (writeResult.ok && writeResult.draft) {
@@ -704,7 +851,12 @@ export default class extends Controller {
         this._draftRevision = draftRevision
       }
 
-      this.scheduleAutoSave()
+      if (shouldWarnForLargeDeletion) {
+        this.showContentLossWarning()
+        this.clearPendingTimers()
+      } else {
+        this.scheduleAutoSave()
+      }
     }
   }
 

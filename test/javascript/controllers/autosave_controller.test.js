@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { Application } from "@hotwired/stimulus"
+import { undo } from "@codemirror/commands"
 import draftStorage from "../../../app/javascript/lib/draft_storage"
 
 // Mock @codemirror/commands before importing the controller
@@ -31,6 +32,7 @@ describe("AutosaveController — Content Loss Detection", () => {
   let container
   let controller
   let mockCodemirrorValue = ""
+  let visibilityStateDescriptor
 
   const mockCodemirrorController = {
     getValue: () => mockCodemirrorValue,
@@ -40,6 +42,7 @@ describe("AutosaveController — Content Loss Detection", () => {
   }
 
   beforeEach(async () => {
+    visibilityStateDescriptor = Object.getOwnPropertyDescriptor(document, "visibilityState")
     ensureLocalStorage()
     // Mock fetch
     global.fetch = vi.fn().mockResolvedValue({
@@ -82,12 +85,15 @@ describe("AutosaveController — Content Loss Detection", () => {
     vi.useRealTimers()
     // Clear all timeouts
     if (controller) {
-      if (controller.saveTimeout) clearTimeout(controller.saveTimeout)
-      if (controller.saveMaxIntervalTimeout) clearTimeout(controller.saveMaxIntervalTimeout)
-      if (controller._offlineBackupTimeout) clearTimeout(controller._offlineBackupTimeout)
+      controller.disconnect()
     }
     vi.restoreAllMocks()
     application.stop()
+    if (visibilityStateDescriptor) {
+      Object.defineProperty(document, "visibilityState", visibilityStateDescriptor)
+    } else {
+      delete document.visibilityState
+    }
     document.body.innerHTML = ""
     localStorage.clear()
   })
@@ -99,8 +105,7 @@ describe("AutosaveController — Content Loss Detection", () => {
 
   describe("saveNow()", () => {
     it("no warning for small deletion (< 20% or < 50 chars)", async () => {
-      controller.currentFile = "test.md"
-      controller._lastSavedContent = makeContent(200)
+      controller.setFile("test.md", makeContent(200), "revision-test")
       mockCodemirrorValue = makeContent(180) // 10% loss, 20 chars lost
 
       await controller.saveNow()
@@ -113,8 +118,7 @@ describe("AutosaveController — Content Loss Detection", () => {
     })
 
     it("shows warning for large deletion (> 20% AND > 50 chars)", async () => {
-      controller.currentFile = "test.md"
-      controller._lastSavedContent = makeContent(300)
+      controller.setFile("test.md", makeContent(300), "revision-test")
       mockCodemirrorValue = "" // 100% loss, 300 chars lost
 
       await controller.saveNow()
@@ -126,11 +130,14 @@ describe("AutosaveController — Content Loss Detection", () => {
       expect(banner.classList.contains("hidden")).toBe(false)
       expect(banner.classList.contains("flex")).toBe(true)
       expect(controller._contentLossWarningActive).toBe(true)
+      expect(draftStorage.readDraft("test.md").draft).toMatchObject({
+        content: "",
+        baseRevision: "revision-test"
+      })
     })
 
     it("no warning when _contentLossOverride is true", async () => {
-      controller.currentFile = "test.md"
-      controller._lastSavedContent = makeContent(300)
+      controller.setFile("test.md", makeContent(300), "revision-test")
       mockCodemirrorValue = "" // 100% loss
       controller._contentLossOverride = true
 
@@ -152,8 +159,7 @@ describe("AutosaveController — Content Loss Detection", () => {
     })
 
     it("resets _contentLossOverride after successful save", async () => {
-      controller.currentFile = "test.md"
-      controller._lastSavedContent = makeContent(300)
+      controller.setFile("test.md", makeContent(300), "revision-test")
       mockCodemirrorValue = "" // 100% loss
       controller._contentLossOverride = true
 
@@ -179,6 +185,203 @@ describe("AutosaveController — Content Loss Detection", () => {
       expect(controller.saveTimeout).toBeNull()
       // But unsaved changes should be tracked
       expect(controller.hasUnsavedChanges).toBe(true)
+    })
+  })
+
+  describe("browser lifecycle draft flush", () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+      controller.setFile("lifecycle.md", "server content", "revision-lifecycle")
+      mockCodemirrorValue = "local content"
+      controller.scheduleAutoSave()
+    })
+
+    it("flushes immediately when the document becomes hidden without a server request", () => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" })
+
+      document.dispatchEvent(new Event("visibilitychange"))
+
+      expect(draftStorage.readDraft("lifecycle.md").draft).toMatchObject({
+        content: "local content",
+        baseRevision: "revision-lifecycle"
+      })
+      expect(global.fetch).not.toHaveBeenCalled()
+      expect(controller._draftWriteTimeouts.size).toBe(0)
+    })
+
+    it("flushes immediately on pagehide without a server request", () => {
+      window.dispatchEvent(new Event("pagehide"))
+
+      expect(draftStorage.readDraft("lifecycle.md").draft).toMatchObject({
+        content: "local content",
+        baseRevision: "revision-lifecycle"
+      })
+      expect(global.fetch).not.toHaveBeenCalled()
+    })
+
+    it.each(["visibilitychange", "pagehide"])("flushes a dirty empty draft on %s", (eventName) => {
+      mockCodemirrorValue = ""
+      if (eventName === "visibilitychange") {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" })
+        document.dispatchEvent(new Event(eventName))
+      } else {
+        window.dispatchEvent(new Event(eventName))
+      }
+
+      expect(draftStorage.readDraft("lifecycle.md").draft).toMatchObject({ content: "" })
+    })
+
+    it("does not rewrite an unchanged draft for repeated lifecycle events", () => {
+      const setItem = vi.spyOn(localStorage, "setItem")
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" })
+
+      document.dispatchEvent(new Event("visibilitychange"))
+      window.dispatchEvent(new Event("pagehide"))
+
+      expect(setItem).toHaveBeenCalledTimes(1)
+    })
+
+    it("shows a storage error and requests a best-effort unload warning when persistence fails", () => {
+      const error = new Error("storage quota exceeded")
+      vi.spyOn(draftStorage, "writeDraft").mockReturnValue({ ok: false, error })
+      vi.spyOn(console, "error").mockImplementation(() => {})
+      window.t.mockImplementation((key) => key)
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" })
+
+      document.dispatchEvent(new Event("visibilitychange"))
+      const beforeUnload = new Event("beforeunload", { cancelable: true })
+      window.dispatchEvent(beforeUnload)
+
+      expect(controller.saveStatusTarget.textContent).toBe("status.draft_storage_error")
+      expect(controller.saveStatusTarget.classList.contains("text-red-500")).toBe(true)
+      expect(beforeUnload.defaultPrevented).toBe(true)
+
+      draftStorage.writeDraft.mockRestore()
+      window.dispatchEvent(new Event("pagehide"))
+
+      expect(controller.saveStatusTarget.textContent).toBe("status.unsaved")
+      expect(controller._beforeUnloadListenerActive).toBe(false)
+    })
+  })
+
+  describe("large-deletion warning file scope", () => {
+    it("does not let file A's warning block autosave for file B", async () => {
+      vi.useFakeTimers()
+      controller.setFile("a.md", makeContent(300), "revision-a")
+      mockCodemirrorValue = ""
+      await controller.saveNow()
+      expect(controller._contentLossWarningActive).toBe(true)
+      expect(draftStorage.readDraft("a.md").draft.content).toBe("")
+
+      controller.prepareForTransition()
+      controller.setFile("b.md", "server B", "revision-b")
+      mockCodemirrorValue = "edited B"
+      controller.scheduleAutoSave()
+      await vi.advanceTimersByTimeAsync(AutosaveController.SAVE_DEBOUNCE_MS)
+
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+      expect(global.fetch.mock.calls[0][0]).toContain("/notes/b.md")
+      expect(controller._contentLossWarningActive).toBe(false)
+      expect(draftStorage.readDraft("a.md").draft.content).toBe("")
+    })
+
+    it("does not reuse save-anyway approval for a later editor snapshot", async () => {
+      controller.setFile("a.md", makeContent(300), "revision-a")
+      mockCodemirrorValue = ""
+      controller._contentLossOverride = true
+      mockCodemirrorValue = makeContent(100)
+
+      await controller.saveNow()
+
+      expect(global.fetch).not.toHaveBeenCalled()
+      expect(controller._contentLossWarningActive).toBe(true)
+      expect(draftStorage.readDraft("a.md").draft.content).toBe(makeContent(100))
+    })
+
+    it("recomputes the warning when a protected draft is restored against its baseline", () => {
+      const baseline = makeContent(300)
+      draftStorage.writeDraft("a.md", "", "revision-a")
+
+      controller.setFile("a.md", baseline, "revision-a")
+      expect(controller.recoverDraft(baseline, "revision-a")).toBe("")
+
+      expect(controller._contentLossWarningActive).toBe(true)
+      expect(container.querySelector('[data-autosave-target="contentLossBanner"]').classList.contains("hidden")).toBe(false)
+    })
+
+    it("recomputes a divergent recovered draft against the latest server baseline", () => {
+      const latestBaseline = makeContent(300)
+      const draft = draftStorage.writeDraft("a.md", "", "old-revision").draft
+      controller.setFile("a.md", latestBaseline, "latest-revision")
+      controller.recoverDraft(latestBaseline, "latest-revision")
+
+      controller.onRecoveryResolved({
+        detail: {
+          source: "draft",
+          content: "",
+          draftRevision: draft.draftRevision
+        }
+      })
+
+      expect(controller._contentLossWarningActive).toBe(true)
+      expect(draftStorage.readDraft("a.md").draft).toMatchObject({
+        content: "",
+        baseRevision: "latest-revision"
+      })
+    })
+
+    it("undo clears the saved draft when it restores the server baseline", async () => {
+      const baseline = makeContent(300)
+      controller.setFile("a.md", baseline, "revision-a")
+      mockCodemirrorValue = ""
+      await controller.saveNow()
+      expect(draftStorage.readDraft("a.md").draft).not.toBeNull()
+
+      undo.mockImplementation(() => { mockCodemirrorValue = baseline })
+      controller.undoContentLoss()
+
+      expect(controller._contentLossWarningActive).toBe(false)
+      expect(draftStorage.readDraft("a.md").draft).toBeNull()
+    })
+
+    it("undo updates the protected draft when the deletion remains large", async () => {
+      const baseline = makeContent(300)
+      controller.setFile("a.md", baseline, "revision-a")
+      mockCodemirrorValue = ""
+      await controller.saveNow()
+
+      undo.mockImplementation(() => { mockCodemirrorValue = makeContent(100) })
+      controller.undoContentLoss()
+
+      expect(controller._contentLossWarningActive).toBe(true)
+      expect(draftStorage.readDraft("a.md").draft).toMatchObject({
+        content: makeContent(100),
+        baseRevision: "revision-a"
+      })
+    })
+
+    it("save anyway removes the matching draft only after success", async () => {
+      controller.setFile("a.md", makeContent(300), "revision-a")
+      mockCodemirrorValue = ""
+      await controller.saveNow()
+      const revision = draftStorage.readDraft("a.md").draft.draftRevision
+
+      await controller.saveAnywayAfterWarning()
+
+      expect(draftStorage.removeDraftIfRevision("a.md", revision)).toEqual({ ok: true, removed: false })
+      expect(draftStorage.readDraft("a.md").draft).toBeNull()
+    })
+
+    it("failed save anyway keeps its local draft", async () => {
+      controller.setFile("a.md", makeContent(300), "revision-a")
+      mockCodemirrorValue = ""
+      await controller.saveNow()
+      const savedDraft = draftStorage.readDraft("a.md").draft
+      global.fetch.mockResolvedValue({ ok: false })
+
+      await controller.saveAnywayAfterWarning()
+
+      expect(draftStorage.readDraft("a.md").draft.draftRevision).toBe(savedDraft.draftRevision)
     })
   })
 
@@ -461,8 +664,7 @@ describe("AutosaveController — Content Loss Detection", () => {
 
   describe("saveAnywayAfterWarning()", () => {
     it("sets override, dismisses banner, and calls saveNow", async () => {
-      controller.currentFile = "test.md"
-      controller._lastSavedContent = makeContent(300)
+      controller.setFile("test.md", makeContent(300), "revision-test")
       mockCodemirrorValue = ""
 
       // Show warning first
