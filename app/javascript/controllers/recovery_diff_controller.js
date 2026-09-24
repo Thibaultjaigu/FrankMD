@@ -24,6 +24,10 @@ export default class extends Controller {
     this.dialogTarget.showModal()
   }
 
+  preventDismiss(event) {
+    event.preventDefault()
+  }
+
   acceptServer() {
     this.dispatch("resolved", {
       detail: {
