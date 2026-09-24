@@ -16,6 +16,32 @@ export default class extends Controller {
     return app?.expandedFolders ? [...app.expandedFolders].join(",") : ""
   }
 
+  getAppController() {
+    const appEl = document.querySelector('[data-controller~="app"]')
+    return appEl ? this.application.getControllerForElementAndIdentifier(appEl, "app") : null
+  }
+
+  preparePathOperation(path, type) {
+    const app = this.getAppController()
+    const activePath = app?.currentFile
+    const matches = type === "folder"
+      ? activePath === path || activePath?.startsWith(`${path}/`)
+      : activePath === path
+    if (!activePath || !matches) return { ok: true, prepared: false }
+
+    const autosave = app.getAutosaveController?.()
+    if (!autosave?.prepareForTransition) {
+      return { ok: false, needsAlert: true }
+    }
+
+    const result = autosave.prepareForTransition()
+    return { ...result, prepared: result.ok, autosave }
+  }
+
+  resumePathOperation(prepared) {
+    if (prepared?.prepared) prepared.autosave?.resumeAfterTransition?.()
+  }
+
   connect() {
     this.draggedItem = null
     this.activeDropTargetId = null
@@ -214,6 +240,12 @@ export default class extends Controller {
 
   // Move item to new location
   async moveItem(oldPath, newPath, type) {
+    const prepared = this.preparePathOperation(oldPath, type)
+    if (!prepared.ok) {
+      if (prepared.needsAlert) alert(window.t("status.draft_storage_error"))
+      return
+    }
+
     try {
       const endpoint = type === "file" ? "notes" : "folders"
       const response = await post(`/${endpoint}/${encodePath(oldPath)}/rename`, {
@@ -230,6 +262,7 @@ export default class extends Controller {
         detail: { oldPath, newPath, type }
       })
     } catch (error) {
+      this.resumePathOperation(prepared)
       console.error("Error moving item:", error)
       alert(error.message)
     }

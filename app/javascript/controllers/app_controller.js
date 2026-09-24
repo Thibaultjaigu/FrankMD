@@ -61,6 +61,8 @@ export default class extends Controller {
     this.currentFile = null
     this.currentFileType = null  // "markdown", "config", or null
     this.expandedFolders = new Set()
+    this._navigationGeneration = 0
+    this._fileNotFoundTimeout = null
 
     // Sidebar/Explorer visibility - always start visible
     // (don't persist closed state across sessions)
@@ -146,6 +148,7 @@ export default class extends Controller {
     if (this.configSaveTimeout) clearTimeout(this.configSaveTimeout)
     if (this._tableCheckTimeout) clearTimeout(this._tableCheckTimeout)
     if (this._initialFileTimeout) clearTimeout(this._initialFileTimeout)
+    if (this._fileNotFoundTimeout) clearTimeout(this._fileNotFoundTimeout)
 
     // Remove window/document event listeners
     if (this.boundPopstateHandler) {
@@ -205,28 +208,23 @@ export default class extends Controller {
   // === URL Management for Bookmarkable URLs ===
 
   handleInitialFile() {
+    const generation = this.beginNavigation()
     // Check if server provided initial note data (from URL like /notes/path/to/file.md)
     const initialNote = this.hasInitialNoteValue ? this.initialNoteValue : null
     if (initialNote && Object.keys(initialNote).length > 0) {
-      const { path, content, exists, error } = initialNote
+      const { path, content, revision, exists, error } = initialNote
 
       if (exists && content !== null) {
-        // File exists - load it directly from server-provided data
-        this.currentFile = path
-        const fileType = this.getFileType(path)
-        const displayPath = fileType === "markdown" ? path.replace(/\.md$/, "") : path
-        this.updatePathDisplay(displayPath)
-        this.expandParentFolders(path)
-        this.showEditor(content, fileType)
-        this.refreshTree()
+        // Initial server data follows the same guarded transition as a fetched file.
+        this.applyLoadedFile(path, content, revision, generation, { updateHistory: false })
         return
       }
 
       if (!exists) {
-        // File was requested but doesn't exist
-        this.showFileNotFoundMessage(path, error || window.t("errors.file_not_found"))
-        // Update URL to root without adding history entry
-        this.updateUrl(null, { replace: true })
+        this.applyFileNotFound(path, error || window.t("errors.file_not_found"), generation, {
+          updateHistory: true,
+          replaceHistory: true
+        })
         return
       }
     }
@@ -263,22 +261,98 @@ export default class extends Controller {
     }
   }
 
+  beginNavigation() {
+    this._navigationGeneration = (this._navigationGeneration || 0) + 1
+    return this._navigationGeneration
+  }
+
+  isCurrentNavigation(generation) {
+    return generation === this._navigationGeneration
+  }
+
+  restoreCurrentFileUrl() {
+    const expectedUrl = this.currentFile ? `/notes/${encodePath(this.currentFile)}` : "/"
+    if (window.location.pathname !== expectedUrl) {
+      this.updateUrl(this.currentFile, { replace: true })
+    }
+  }
+
+  prepareEditorTransition(generation) {
+    if (!this.isCurrentNavigation(generation)) return false
+
+    const autosave = this.getAutosaveController()
+    if (this.currentFile && (!autosave || typeof autosave.prepareForTransition !== "function")) {
+      this.restoreCurrentFileUrl()
+      return false
+    }
+    const result = autosave?.prepareForTransition ? autosave.prepareForTransition() : { ok: true }
+    if (!result.ok) {
+      if (this.isCurrentNavigation(generation)) this.restoreCurrentFileUrl()
+      return false
+    }
+
+    return this.isCurrentNavigation(generation)
+  }
+
+  applyLoadedFile(path, content, revision, generation, { updateHistory = true } = {}) {
+    if (!this.prepareEditorTransition(generation)) return false
+    if (!this.isCurrentNavigation(generation)) return false
+
+    this.currentFile = path
+    const fileType = this.getFileType(path)
+    const displayPath = fileType === "markdown" ? path.replace(/\.md$/, "") : path
+    this.updatePathDisplay(displayPath)
+    this.expandParentFolders(path)
+    this.showEditor(content, fileType, revision)
+    this.refreshTree(generation)
+
+    if (updateHistory && this.isCurrentNavigation(generation)) this.updateUrl(path)
+    return true
+  }
+
+  applyFileNotFound(path, message, generation, { updateHistory = false, replaceHistory = false } = {}) {
+    if (!this.prepareEditorTransition(generation)) return false
+    if (!this.isCurrentNavigation(generation)) return false
+
+    this.currentFile = null
+    this.currentFileType = null
+    this.getAutosaveController()?.clearFile?.()
+    this.showFileNotFoundMessage(path, message, generation)
+    this.refreshTree(generation)
+    if (updateHistory && this.isCurrentNavigation(generation)) {
+      this.updateUrl(null, { replace: replaceHistory })
+    }
+    return true
+  }
+
+  clearEditor(generation) {
+    if (!this.prepareEditorTransition(generation)) return false
+    if (!this.isCurrentNavigation(generation)) return false
+
+    this.currentFile = null
+    this.currentFileType = null
+    this.getAutosaveController()?.clearFile?.()
+    this.updatePathDisplay(null)
+    this.textareaTarget.disabled = false
+    this.editorPlaceholderTarget.classList.remove("hidden")
+    this.editorTarget.classList.add("hidden")
+    this.editorToolbarTarget.classList.add("hidden")
+    this.editorToolbarTarget.classList.remove("flex")
+    this.hideStatsPanel()
+    this.refreshTree(generation)
+    return true
+  }
+
   setupHistoryHandling() {
     this.boundPopstateHandler = async (event) => {
+      const generation = this.beginNavigation()
       const path = event.state?.file || this.getFilePathFromUrl()
 
       if (path) {
-        await this.loadFile(path, { updateHistory: false })
+        await this.loadFile(path, { updateHistory: false, generation })
       } else {
-        // No file - show placeholder
-        this.currentFile = null
-        this.updatePathDisplay(null)
-        this.editorPlaceholderTarget.classList.remove("hidden")
-        this.editorTarget.classList.add("hidden")
-        this.editorToolbarTarget.classList.add("hidden")
-        this.editorToolbarTarget.classList.remove("flex")
-        this.hideStatsPanel()
-        this.refreshTree()
+        // No file - preserve the outgoing draft before showing the placeholder.
+        this.clearEditor(generation)
       }
     }
     window.addEventListener("popstate", this.boundPopstateHandler)
@@ -294,7 +368,10 @@ export default class extends Controller {
     }
   }
 
-  showFileNotFoundMessage(path, message) {
+  showFileNotFoundMessage(path, message, generation = this._navigationGeneration) {
+    if (!this.isCurrentNavigation(generation)) return
+    if (this._fileNotFoundTimeout) clearTimeout(this._fileNotFoundTimeout)
+
     this.editorPlaceholderTarget.classList.add("hidden")
     this.editorTarget.classList.remove("hidden")
     this.editorToolbarTarget.classList.add("hidden")
@@ -309,7 +386,9 @@ export default class extends Controller {
     `
 
     // Clear after a moment and return to normal state
-    setTimeout(() => {
+    this._fileNotFoundTimeout = setTimeout(() => {
+      this._fileNotFoundTimeout = null
+      if (!this.isCurrentNavigation(generation)) return
       this.textareaTarget.disabled = false
       this.updatePathDisplay(null)
       this.editorPlaceholderTarget.classList.remove("hidden")
@@ -384,47 +463,41 @@ export default class extends Controller {
 
   async loadFile(path, options = {}) {
     const { updateHistory = true } = options
+    const generation = options.generation ?? this.beginNavigation()
 
     try {
       const response = await get(`/notes/${encodePath(path)}`, { responseKind: "json" })
+      if (!this.isCurrentNavigation(generation)) return
 
       if (!response.ok) {
         if (response.statusCode === 404) {
-          this.showFileNotFoundMessage(path, window.t("errors.note_not_found"))
-          if (updateHistory) {
-            this.updateUrl(null)
-          }
+          this.applyFileNotFound(path, window.t("errors.note_not_found"), generation, {
+            updateHistory,
+            replaceHistory: false
+          })
           return
         }
         throw new Error(window.t("errors.failed_to_load"))
       }
 
       const data = await response.json
-      this.currentFile = path
-      const fileType = this.getFileType(path)
-
-      // Display path (don't strip extension for non-markdown files)
-      const displayPath = fileType === "markdown" ? path.replace(/\.md$/, "") : path
-      this.updatePathDisplay(displayPath)
-
-      // Expand parent folders in tree
-      this.expandParentFolders(path)
-
-      this.showEditor(data.content, fileType)
-      this.refreshTree()
-
-      // Update URL for bookmarkability
-      if (updateHistory) {
-        this.updateUrl(path)
-      }
+      if (!this.isCurrentNavigation(generation)) return
+      this.applyLoadedFile(path, data.content, data.revision, generation, { updateHistory })
     } catch (error) {
+      if (!this.isCurrentNavigation(generation)) return
       console.error("Error loading file:", error)
+      this.restoreCurrentFileUrl()
       const autosave = this.getAutosaveController()
       if (autosave) autosave.showSaveStatus(window.t("status.error_loading"), true)
     }
   }
 
-  showEditor(content, fileType = "markdown") {
+  showEditor(content, fileType = "markdown", revision = null) {
+    if (this._fileNotFoundTimeout) {
+      clearTimeout(this._fileNotFoundTimeout)
+      this._fileNotFoundTimeout = null
+    }
+    this.textareaTarget.disabled = false
     this.currentFileType = fileType
     this.editorPlaceholderTarget.classList.add("hidden")
     this.editorTarget.classList.remove("hidden")
@@ -438,20 +511,29 @@ export default class extends Controller {
 
     // Delegate persistence tracking to autosave controller
     const autosave = this.getAutosaveController()
+    let editorContent = content
     if (autosave) {
-      autosave.setFile(this.currentFile, content)
-      autosave.checkOfflineBackup(content)
+      autosave.setFile(this.currentFile, content, revision)
+      if (autosave.recoverDraft) {
+        editorContent = autosave.recoverDraft(content, revision)
+      } else {
+        autosave.checkOfflineBackup(content)
+      }
     }
 
     // Set content via CodeMirror controller
     const codemirrorController = this.getCodemirrorController()
     if (codemirrorController) {
-      codemirrorController.setValue(content)
+      codemirrorController.setValue(editorContent)
       codemirrorController.focus()
     } else {
       // Fallback to hidden textarea
-      this.textareaTarget.value = content
+      this.textareaTarget.value = editorContent
     }
+
+    // Applying a recovered draft can be a programmatic editor change. Ensure
+    // it remains queued for autosave even when CodeMirror sees no text delta.
+    if (autosave && editorContent !== content) autosave.scheduleAutoSave()
 
     // Only show toolbar and preview for markdown files
     const isMarkdown = fileType === "markdown"
@@ -1380,16 +1462,30 @@ export default class extends Controller {
 
   onFileDeleted(event) {
     const { path, type } = event.detail
+    const activeFileWasDeleted = this.currentFile === path || (
+      type === "folder" && this.currentFile?.startsWith(`${path}/`)
+    )
+    const autosave = this.getAutosaveController()
 
-    this.getAutosaveController()?.deleteFile(path, type)
+    const cleanup = autosave?.deleteFile(path, type)
+    if (cleanup && !cleanup.ok) {
+      this.showTemporaryMessage(window.t("status.draft_storage_error"), 5000)
+    }
 
     // Clear editor if deleted file was currently open
-    if (this.currentFile === path) {
+    if (activeFileWasDeleted) {
       this.currentFile = null
+      this.currentFileType = null
       this.updatePathDisplay(null)
+      if (this.hasTextareaTarget) this.textareaTarget.disabled = false
       this.editorPlaceholderTarget.classList.remove("hidden")
       this.editorTarget.classList.add("hidden")
+      if (this.hasEditorToolbarTarget) {
+        this.editorToolbarTarget.classList.add("hidden")
+        this.editorToolbarTarget.classList.remove("flex")
+      }
       this.hideStatsPanel()
+      this.updateUrl(null, { replace: true })
     }
 
     // Tree is already updated by Turbo Stream
@@ -1422,13 +1518,14 @@ export default class extends Controller {
     }
   }
 
-  async refreshTree() {
+  async refreshTree(generation = this._navigationGeneration) {
     try {
       const expanded = [...this.expandedFolders].join(",")
       const selected = this.currentFile || ""
       const response = await get(`/notes/tree?expanded=${encodeURIComponent(expanded)}&selected=${encodeURIComponent(selected)}`)
       if (response.ok) {
         const html = await response.text
+        if (!this.isCurrentNavigation(generation) || this.currentFile !== (selected || null)) return
         this.fileTreeTarget.innerHTML = html
       }
     } catch (error) {

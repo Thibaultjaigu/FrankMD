@@ -13,7 +13,7 @@ describe("RecoveryDiffController", () => {
   beforeEach(async () => {
     document.body.innerHTML = `
       <div data-controller="recovery-diff">
-        <dialog data-recovery-diff-target="dialog">
+        <dialog data-recovery-diff-target="dialog" data-action="cancel->recovery-diff#preventDismiss">
           <div data-recovery-diff-target="serverText"></div>
           <div data-recovery-diff-target="backupText"></div>
           <span data-recovery-diff-target="backupTimestamp"></span>
@@ -33,8 +33,8 @@ describe("RecoveryDiffController", () => {
 
     // Mock showModal/close since jsdom doesn't support <dialog> fully
     const dialog = container.querySelector("dialog")
-    dialog.showModal = vi.fn()
-    dialog.close = vi.fn()
+    dialog.showModal = vi.fn(function() { this.setAttribute("open", "") })
+    dialog.close = vi.fn(function() { this.removeAttribute("open") })
   })
 
   afterEach(() => {
@@ -94,13 +94,9 @@ describe("RecoveryDiffController", () => {
 
       expect(dialog.showModal).toHaveBeenCalled()
     })
-  })
 
-  describe("acceptServer()", () => {
-    it("dispatches resolved event with source server and closes dialog", () => {
+    it("prevents Escape from dismissing recovery before an explicit choice", () => {
       const dialog = container.querySelector("dialog")
-      const dispatchSpy = vi.spyOn(controller, "dispatch")
-
       controller.open({
         path: "test.md",
         serverContent: "server",
@@ -108,10 +104,39 @@ describe("RecoveryDiffController", () => {
         backupTimestamp: Date.now()
       })
 
+      const cancelEvent = new Event("cancel", { cancelable: true })
+      dialog.dispatchEvent(cancelEvent)
+
+      expect(cancelEvent.defaultPrevented).toBe(true)
+      expect(dialog.open).toBe(true)
+      expect(dialog.close).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("acceptServer()", () => {
+    it("dispatches resolved event with source server and closes dialog", () => {
+      const dialog = container.querySelector("dialog")
+      const dispatchSpy = vi.spyOn(controller, "dispatch")
+      const timestamp = Date.now()
+
+      controller.open({
+        path: "test.md",
+        serverContent: "server",
+        backupContent: "backup",
+        backupTimestamp: timestamp,
+        draftRevision: "draft-1"
+      })
+
       controller.acceptServer()
 
       expect(dispatchSpy).toHaveBeenCalledWith("resolved", {
-        detail: { source: "server" }
+        detail: {
+          source: "server",
+          path: "test.md",
+          draftRevision: "draft-1",
+          backupContent: "backup",
+          backupTimestamp: timestamp
+        }
       })
       expect(dialog.close).toHaveBeenCalled()
     })
@@ -121,20 +146,57 @@ describe("RecoveryDiffController", () => {
     it("dispatches resolved event with source backup and content, then closes", () => {
       const dialog = container.querySelector("dialog")
       const dispatchSpy = vi.spyOn(controller, "dispatch")
+      const timestamp = Date.now()
 
       controller.open({
         path: "test.md",
         serverContent: "server",
         backupContent: "my backup content",
-        backupTimestamp: Date.now()
+        backupTimestamp: timestamp
       })
 
       controller.acceptBackup()
 
       expect(dispatchSpy).toHaveBeenCalledWith("resolved", {
-        detail: { source: "backup", content: "my backup content" }
+        detail: {
+          source: "backup",
+          path: "test.md",
+          content: "my backup content",
+          backupContent: "my backup content",
+          draftRevision: null,
+          backupTimestamp: timestamp
+        }
       })
       expect(dialog.close).toHaveBeenCalled()
+    })
+
+    it("includes the selected conflict identity so recovery cannot consume another draft", () => {
+      const dispatchSpy = vi.spyOn(controller, "dispatch")
+      const timestamp = Date.now()
+
+      controller.open({
+        path: "new.md",
+        serverContent: "server version",
+        backupContent: "moved draft",
+        backupTimestamp: timestamp,
+        source: "draft-conflict",
+        draftRevision: "draft-2",
+        conflictId: "conflict-1"
+      })
+
+      controller.acceptBackup()
+
+      expect(dispatchSpy).toHaveBeenCalledWith("resolved", {
+        detail: {
+          source: "draft-conflict",
+          path: "new.md",
+          content: "moved draft",
+          backupContent: "moved draft",
+          draftRevision: "draft-2",
+          backupTimestamp: timestamp,
+          conflictId: "conflict-1"
+        }
+      })
     })
   })
 })

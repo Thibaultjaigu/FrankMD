@@ -43,6 +43,36 @@ export default class extends Controller {
     return app?.expandedFolders ? [...app.expandedFolders].join(",") : ""
   }
 
+  getAppController() {
+    const appEl = document.querySelector('[data-controller~="app"]')
+    return appEl ? this.application.getControllerForElementAndIdentifier(appEl, "app") : null
+  }
+
+  preparePathOperation(path, type) {
+    const app = this.getAppController()
+    if (!app?.currentFile || !this.pathMatchesItem(app.currentFile, path, type)) {
+      return { ok: true, prepared: false }
+    }
+
+    const autosave = app.getAutosaveController?.()
+    if (!autosave?.prepareForTransition) {
+      return { ok: false, error: new Error("Unable to preserve the active local draft"), needsAlert: true }
+    }
+
+    const result = autosave.prepareForTransition()
+    return { ...result, prepared: result.ok, autosave }
+  }
+
+  pathMatchesItem(path, itemPath, type) {
+    return type === "folder"
+      ? path === itemPath || path.startsWith(`${itemPath}/`)
+      : path === itemPath
+  }
+
+  resumePathOperation(prepared) {
+    if (prepared?.prepared) prepared.autosave?.resumeAfterTransition?.()
+  }
+
   setupContextMenuClose() {
     this.boundContextMenuClose = (event) => {
       if (!this.hasContextMenuTarget) return
@@ -433,10 +463,17 @@ export default class extends Controller {
       return
     }
 
+    const item = { ...this.contextItem }
+    const prepared = this.preparePathOperation(item.path, item.type)
+    if (!prepared.ok) {
+      if (prepared.needsAlert) window.alert(window.t("status.draft_storage_error"))
+      return
+    }
+
     try {
-      const endpoint = this.contextItem.type === "file" ? "notes" : "folders"
+      const endpoint = item.type === "file" ? "notes" : "folders"
       const expanded = this.expandedFolders
-      const response = await post(`/${endpoint}/${encodePath(this.contextItem.path)}/rename`, {
+      const response = await post(`/${endpoint}/${encodePath(item.path)}/rename`, {
         body: { new_path: newPath, expanded },
         responseKind: "turbo-stream"
       })
@@ -450,14 +487,15 @@ export default class extends Controller {
 
       this.dispatch("file-renamed", {
         detail: {
-          oldPath: this.contextItem.path,
+          oldPath: item.path,
           newPath: newPath,
-          type: this.contextItem.type
+          type: item.type
         }
       })
 
       this.closeRenameDialog()
     } catch (error) {
+      this.resumePathOperation(prepared)
       console.error("Failed to rename:", error)
       alert(error.message || window.t("errors.failed_to_rename"))
     }
@@ -477,10 +515,17 @@ export default class extends Controller {
       return
     }
 
+    const item = { ...this.contextItem }
+    const prepared = this.preparePathOperation(item.path, item.type)
+    if (!prepared.ok) {
+      if (prepared.needsAlert) window.alert(window.t("status.draft_storage_error"))
+      return
+    }
+
     try {
-      const endpoint = this.contextItem.type === "file" ? "notes" : "folders"
+      const endpoint = item.type === "file" ? "notes" : "folders"
       const expanded = this.expandedFolders
-      const response = await destroy(`/${endpoint}/${encodePath(this.contextItem.path)}?expanded=${encodeURIComponent(expanded)}`, {
+      const response = await destroy(`/${endpoint}/${encodePath(item.path)}?expanded=${encodeURIComponent(expanded)}`, {
         responseKind: "turbo-stream"
       })
 
@@ -493,11 +538,12 @@ export default class extends Controller {
 
       this.dispatch("file-deleted", {
         detail: {
-          path: this.contextItem.path,
-          type: this.contextItem.type
+          path: item.path,
+          type: item.type
         }
       })
     } catch (error) {
+      this.resumePathOperation(prepared)
       console.error("Failed to delete:", error)
       alert(error.message || window.t("errors.failed_to_delete"))
     }

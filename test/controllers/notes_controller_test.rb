@@ -88,6 +88,7 @@ class NotesControllerTest < ActionDispatch::IntegrationTest
     data = JSON.parse(response.body)
     assert_equal "test.md", data["path"]
     assert_equal "# Hello\n\nWorld", data["content"]
+    assert_equal Digest::SHA256.hexdigest(data["content"]), data["revision"]
   end
 
   test "show returns 404 for missing note" do
@@ -259,6 +260,7 @@ class NotesControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
 
     assert_equal "New content", File.read(@test_notes_dir.join("test.md"))
+    assert_equal Digest::SHA256.hexdigest("New content"), JSON.parse(response.body)["revision"]
   end
 
   test "update returns 404 without creating a missing note" do
@@ -487,6 +489,7 @@ class NotesControllerTest < ActionDispatch::IntegrationTest
       note_data = JSON.parse(json_str)
       assert_equal "bookmarked.md", note_data["path"]
       assert_equal "# Bookmarked Content", note_data["content"]
+      assert_equal Digest::SHA256.hexdigest(note_data["content"]), note_data["revision"]
       assert_equal true, note_data["exists"]
     end
   end

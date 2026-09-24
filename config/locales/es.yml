@@ -105,6 +105,7 @@ es:
     saved: "Guardado"
     unsaved: "Cambios sin guardar"
     error_saving: "Error al guardar"
+    draft_storage_error: "No se pudo guardar el borrador local. Mantén esta página abierta e inténtalo de nuevo antes de salir."
     error_loading: "Error al cargar nota"
     searching: "Buscando..."
     no_matches: "No se encontraron coincidencias"
