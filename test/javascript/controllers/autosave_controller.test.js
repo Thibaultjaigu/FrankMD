@@ -182,6 +182,112 @@ describe("AutosaveController — Content Loss Detection", () => {
     })
   })
 
+  describe("file transition preparation and save scoping", () => {
+    it("flushes the outgoing snapshot before cancelling timers without forcing a server save", () => {
+      vi.useFakeTimers()
+      controller.setFile("a.md", "server A", "revision-a")
+      mockCodemirrorValue = "local draft A"
+      controller.scheduleAutoSave()
+      const saveNow = vi.spyOn(controller, "saveNow")
+
+      const result = controller.prepareForTransition()
+
+      expect(result.ok).toBe(true)
+      expect(draftStorage.readDraft("a.md").draft).toMatchObject({
+        content: "local draft A",
+        baseRevision: "revision-a"
+      })
+      expect(controller.saveTimeout).toBeNull()
+      expect(controller.saveMaxIntervalTimeout).toBeNull()
+      expect(saveNow).not.toHaveBeenCalled()
+      expect(global.fetch).not.toHaveBeenCalled()
+    })
+
+    it("keeps the outgoing file active and does not cancel its save timers when draft storage fails", () => {
+      vi.useFakeTimers()
+      const error = new Error("storage unavailable")
+      vi.spyOn(draftStorage, "writeDraft").mockReturnValue({ ok: false, error })
+      vi.spyOn(console, "error").mockImplementation(() => {})
+      controller.setFile("a.md", "server A", "revision-a")
+      mockCodemirrorValue = "local draft A"
+      controller.scheduleAutoSave()
+
+      const result = controller.prepareForTransition()
+
+      expect(result).toMatchObject({ ok: false, error })
+      expect(controller.currentFile).toBe("a.md")
+      expect(controller.saveTimeout).not.toBeNull()
+      expect(controller.saveMaxIntervalTimeout).not.toBeNull()
+      expect(global.fetch).not.toHaveBeenCalled()
+    })
+
+    it("blocks a dirty transition when the file has no server revision to anchor its draft", () => {
+      vi.spyOn(console, "error").mockImplementation(() => {})
+      controller.setFile("a.md", "server A")
+      mockCodemirrorValue = "local draft A"
+
+      const result = controller.prepareForTransition()
+
+      expect(result.ok).toBe(false)
+      expect(controller.currentFile).toBe("a.md")
+      expect(global.fetch).not.toHaveBeenCalled()
+    })
+
+    it("never lets an autosave scheduled for A read or save B", async () => {
+      vi.useFakeTimers()
+      controller.setFile("a.md", "server A", "revision-a")
+      mockCodemirrorValue = "draft A"
+      controller.scheduleAutoSave()
+
+      // Simulate a transition that changed the controller before the old timer
+      // callback ran. The snapshot guard must still keep it scoped to A.
+      controller.setFile("b.md", "server B", "revision-b")
+      mockCodemirrorValue = "draft B"
+      await vi.advanceTimersByTimeAsync(AutosaveController.SAVE_DEBOUNCE_MS)
+
+      expect(global.fetch).not.toHaveBeenCalled()
+      expect(controller.currentFile).toBe("b.md")
+    })
+
+    it("does not require a server save while offline before preparing a transition", () => {
+      vi.useFakeTimers()
+      controller.isOffline = true
+      controller.setFile("a.md", "server A", "revision-a")
+      mockCodemirrorValue = "local draft A"
+      controller.scheduleAutoSave()
+      const saveNow = vi.spyOn(controller, "saveNow")
+
+      const result = controller.prepareForTransition()
+
+      expect(result.ok).toBe(true)
+      expect(draftStorage.readDraft("a.md").draft.content).toBe("local draft A")
+      expect(saveNow).not.toHaveBeenCalled()
+      expect(global.fetch).not.toHaveBeenCalled()
+    })
+
+    it("does not apply an in-flight A save response to the active B state", async () => {
+      controller.setFile("a.md", "server A", "revision-a")
+      mockCodemirrorValue = "draft A"
+      let resolveFetch
+      global.fetch.mockImplementation(() => new Promise((resolve) => { resolveFetch = resolve }))
+      const savePromise = controller.saveNow()
+      await vi.waitFor(() => expect(resolveFetch).toBeDefined())
+
+      controller.setFile("b.md", "server B", "revision-b")
+      mockCodemirrorValue = "draft B"
+      resolveFetch({
+        ok: true,
+        json: () => Promise.resolve({ revision: "saved-revision-a" })
+      })
+      await savePromise
+
+      expect(controller.currentFile).toBe("b.md")
+      expect(controller._baseRevision).toBe("revision-b")
+      expect(controller._lastSavedContent).toBe("server B")
+      expect(controller.saveStatusTarget.textContent).toBe("")
+    })
+  })
+
   describe("online draft persistence and recovery", () => {
     it("debounces an online empty draft and stores it independently by path", async () => {
       vi.useFakeTimers()

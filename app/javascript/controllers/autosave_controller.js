@@ -30,6 +30,8 @@ export default class extends Controller {
     this._knownBaseRevisions = new Map()
     this._baseRevision = null
     this._draftRevision = null
+    this._saveScheduleGeneration = 0
+    this._scheduledSaveSnapshot = null
   }
 
   disconnect() {
@@ -58,15 +60,59 @@ export default class extends Controller {
     this._fileVersion += 1
   }
 
+  prepareForTransition() {
+    const path = this.currentFile
+    if (!path) {
+      this.clearPendingTimers()
+      return { ok: true, draft: null }
+    }
+
+    const codemirrorController = this.getCodemirrorController()
+    const content = codemirrorController ? codemirrorController.getValue() : ""
+    if (content !== this._lastSavedContent && !this._baseRevision) {
+      const error = new Error("Cannot persist the outgoing draft without a server revision")
+      this.showDraftStorageError(error)
+      return { ok: false, error }
+    }
+    const result = this.flushDraftWrite(path, content, this._baseRevision)
+    if (!result.ok) return result
+
+    // A transition must never let an outgoing save or backup timer inspect the
+    // newly active editor. Flush the local draft first, then invalidate timers.
+    this.clearPendingTimers()
+    return result
+  }
+
+  clearFile() {
+    this.clearPendingTimers()
+    if (this.currentFile) this.clearDraftWriteTimeout(this.currentFile)
+    this.currentFile = null
+    this._lastSavedContent = null
+    this._baseRevision = null
+    this._draftRevision = null
+    this.hasUnsavedChanges = false
+    this._fileVersion += 1
+    this.dismissContentLossWarning()
+    this.showSaveStatus("")
+  }
+
   // Keep autosave attached to a note when its path changes without loading it
   // as a new file. In particular, do not reset the dirty state here: a rename
   // must not make pending editor changes look persisted.
   renameFile(oldPath, newPath, type = "file") {
-    const remappedPath = this.remapPath(this.currentFile, oldPath, newPath, type)
-    if (remappedPath === this.currentFile) return false
+    const currentPath = this.currentFile
+    const remappedPath = this.remapPath(currentPath, oldPath, newPath, type)
+    if (remappedPath === currentPath) return false
 
     this.currentFile = remappedPath
     this._fileVersion += 1
+    if (this._scheduledSaveSnapshot?.path === currentPath) {
+      this._scheduledSaveSnapshot = {
+        ...this._scheduledSaveSnapshot,
+        path: remappedPath,
+        fileVersion: this._fileVersion
+      }
+    }
     return true
   }
 
@@ -111,6 +157,8 @@ export default class extends Controller {
   }
 
   clearPendingTimers() {
+    this._saveScheduleGeneration += 1
+    this._scheduledSaveSnapshot = null
     if (this.saveTimeout) {
       clearTimeout(this.saveTimeout)
       this.saveTimeout = null
@@ -194,7 +242,8 @@ export default class extends Controller {
   removeDraftIfRevision(path, revision) {
     const result = draftStorage.removeDraftIfRevision(path, revision)
     if (!result.ok) {
-      this.showDraftStorageError(result.error)
+      if (path === this.currentFile) this.showDraftStorageError(result.error)
+      else console.error("Unable to remove saved local draft:", result.error)
     } else if (result.removed && path === this.currentFile && revision === this._draftRevision) {
       this._draftRevision = null
     }
@@ -332,13 +381,14 @@ export default class extends Controller {
   scheduleOfflineBackup() {
     if (!this.isOffline || !this.currentFile) return
 
+    const path = this.currentFile
+    const cm = this.getCodemirrorController()
+    const content = cm ? cm.getValue() : ""
     if (this._offlineBackupTimeout) clearTimeout(this._offlineBackupTimeout)
     this._offlineBackupTimeout = setTimeout(() => {
       this._offlineBackupTimeout = null
-      const cm = this.getCodemirrorController()
-      const content = cm ? cm.getValue() : ""
       const backup = this.getOfflineBackupController()
-      if (backup) backup.save(this.currentFile, content)
+      if (backup) backup.save(path, content)
     }, 1000)
   }
 
@@ -366,35 +416,65 @@ export default class extends Controller {
       clearTimeout(this.saveTimeout)
     }
 
-    this.saveTimeout = setTimeout(() => this.saveNow(), this.constructor.SAVE_DEBOUNCE_MS)
+    const snapshot = this.captureSaveSnapshot()
+    this._scheduledSaveSnapshot = snapshot
+    const generation = this._saveScheduleGeneration
+
+    this.saveTimeout = setTimeout(() => {
+      if (generation !== this._saveScheduleGeneration) return
+      this.saveTimeout = null
+      const scheduledSnapshot = this._scheduledSaveSnapshot
+      if (scheduledSnapshot && this.isCurrentSaveSnapshot(scheduledSnapshot)) {
+        this.saveNow(scheduledSnapshot)
+      }
+    }, this.constructor.SAVE_DEBOUNCE_MS)
 
     if (!this.saveMaxIntervalTimeout) {
       this.saveMaxIntervalTimeout = setTimeout(() => {
+        if (generation !== this._saveScheduleGeneration) return
         this.saveMaxIntervalTimeout = null
-        if (this.hasUnsavedChanges) {
-          this.saveNow()
+        const scheduledSnapshot = this._scheduledSaveSnapshot
+        if (this.hasUnsavedChanges && scheduledSnapshot && this.isCurrentSaveSnapshot(scheduledSnapshot)) {
+          this.saveNow(scheduledSnapshot)
         }
       }, this.constructor.SAVE_MAX_INTERVAL_MS)
     }
   }
 
-  async saveNow() {
+  captureSaveSnapshot() {
+    const codemirrorController = this.getCodemirrorController()
+    return {
+      path: this.currentFile,
+      fileVersion: this._fileVersion,
+      content: codemirrorController ? codemirrorController.getValue() : "",
+      baseRevision: this._baseRevision
+    }
+  }
+
+  isCurrentSaveSnapshot(snapshot) {
+    return snapshot.path === this.currentFile && snapshot.fileVersion === this._fileVersion
+  }
+
+  async saveNow(snapshot = null) {
     if (this.isOffline) {
       this.hasUnsavedChanges = true
       return
     }
 
     if (!this.currentFile) return
+    if (snapshot && !this.isCurrentSaveSnapshot(snapshot)) return
     if (this._isSaving) return
 
-    const filePath = this.currentFile
-    const fileVersion = this._fileVersion
+    const saveSnapshot = snapshot || this.captureSaveSnapshot()
+    const filePath = saveSnapshot.path
+    const fileVersion = saveSnapshot.fileVersion
     this.clearPendingTimers()
 
     const codemirrorController = this.getCodemirrorController()
-    const content = codemirrorController ? codemirrorController.getValue() : ""
+    const content = saveSnapshot.content
+    const baseRevision = saveSnapshot.baseRevision
     const isConfigFile = filePath === ".fed"
-    const savedDraft = this.flushDraftWrite(filePath, content, this._baseRevision)
+    const savedDraft = this.flushDraftWrite(filePath, content, baseRevision)
     const savedDraftRevision = savedDraft.ok ? savedDraft.draft?.draftRevision : null
 
     if (content === this._lastSavedContent) {
