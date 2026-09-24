@@ -82,6 +82,90 @@ describe("DraftStorage", () => {
     expect(drafts.readDraft("docs/index.md").draft).toBeNull()
   })
 
+  it("remaps a legacy backup with a renamed file", () => {
+    const storage = new MemoryStorage()
+    const drafts = new DraftStorage(() => storage)
+    const backup = JSON.stringify({ content: "unsaved legacy edit", timestamp: 123 })
+    storage.setItem(drafts.backupKey("notes/old.md"), backup)
+
+    expect(drafts.remapDrafts("notes/old.md", "archive/new.md")).toEqual({ ok: true, remapped: 1 })
+    expect(storage.getItem(drafts.backupKey("notes/old.md"))).toBeNull()
+    expect(storage.getItem(drafts.backupKey("archive/new.md"))).toBe(backup)
+  })
+
+  it("remaps legacy backups in a moved folder without touching neighboring paths", () => {
+    const storage = new MemoryStorage()
+    const drafts = new DraftStorage(() => storage)
+    const indexBackup = JSON.stringify({ content: "index edit", timestamp: 123 })
+    const nestedBackup = JSON.stringify({ content: "nested edit", timestamp: 456 })
+    const unrelatedBackup = JSON.stringify({ content: "keep", timestamp: 789 })
+    storage.setItem(drafts.backupKey("docs/index.md"), indexBackup)
+    storage.setItem(drafts.backupKey("docs/guides/setup.md"), nestedBackup)
+    storage.setItem(drafts.backupKey("docs-old/keep.md"), unrelatedBackup)
+
+    expect(drafts.remapDrafts("docs", "archive", "folder")).toEqual({ ok: true, remapped: 2 })
+    expect(storage.getItem(drafts.backupKey("docs/index.md"))).toBeNull()
+    expect(storage.getItem(drafts.backupKey("docs/guides/setup.md"))).toBeNull()
+    expect(storage.getItem(drafts.backupKey("archive/index.md"))).toBe(indexBackup)
+    expect(storage.getItem(drafts.backupKey("archive/guides/setup.md"))).toBe(nestedBackup)
+    expect(storage.getItem(drafts.backupKey("docs-old/keep.md"))).toBe(unrelatedBackup)
+  })
+
+  it("preserves both legacy backups and reports a destination collision", () => {
+    const storage = new MemoryStorage()
+    const drafts = new DraftStorage(() => storage)
+    const sourceBackup = JSON.stringify({ content: "source edit", timestamp: 123 })
+    const destinationBackup = JSON.stringify({ content: "other edit", timestamp: 456 })
+    storage.setItem(drafts.backupKey("old.md"), sourceBackup)
+    storage.setItem(drafts.backupKey("new.md"), destinationBackup)
+
+    const result = drafts.remapDrafts("old.md", "new.md")
+
+    expect(result).toMatchObject({
+      ok: false,
+      backupCollision: true,
+      sourcePath: "old.md",
+      destinationPath: "new.md"
+    })
+    expect(storage.getItem(drafts.backupKey("old.md"))).toBe(sourceBackup)
+    expect(storage.getItem(drafts.backupKey("new.md"))).toBe(destinationBackup)
+  })
+
+  it("retains the source legacy backup when writing the destination fails", () => {
+    const storage = new MemoryStorage()
+    const drafts = new DraftStorage(() => storage)
+    const backup = JSON.stringify({ content: "unsaved edit", timestamp: 123 })
+    storage.setItem(drafts.backupKey("old.md"), backup)
+    vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
+      if (key === drafts.backupKey("new.md")) throw new Error("quota exceeded")
+      MemoryStorage.prototype.setItem.call(storage, key, value)
+    })
+
+    expect(drafts.remapDrafts("old.md", "new.md")).toMatchObject({ ok: false, sourcePath: "old.md" })
+    expect(storage.getItem(drafts.backupKey("old.md"))).toBe(backup)
+    expect(storage.getItem(drafts.backupKey("new.md"))).toBeNull()
+  })
+
+  it("keeps both legacy backup copies if removing the verified source fails", () => {
+    const storage = new MemoryStorage()
+    const drafts = new DraftStorage(() => storage)
+    const backup = JSON.stringify({ content: "unsaved edit", timestamp: 123 })
+    storage.setItem(drafts.backupKey("old.md"), backup)
+    const removeItem = vi.spyOn(storage, "removeItem").mockImplementation(key => {
+      if (key === drafts.backupKey("old.md")) throw new Error("storage unavailable")
+      MemoryStorage.prototype.removeItem.call(storage, key)
+    })
+
+    expect(drafts.remapDrafts("old.md", "new.md")).toMatchObject({ ok: false, sourcePath: "old.md" })
+    expect(storage.getItem(drafts.backupKey("old.md"))).toBe(backup)
+    expect(storage.getItem(drafts.backupKey("new.md"))).toBe(backup)
+
+    removeItem.mockRestore()
+    expect(drafts.remapDrafts("old.md", "new.md")).toEqual({ ok: true, remapped: 1 })
+    expect(storage.getItem(drafts.backupKey("old.md"))).toBeNull()
+    expect(storage.getItem(drafts.backupKey("new.md"))).toBe(backup)
+  })
+
   it("preserves both source and destination drafts when a remap collides", () => {
     const storage = new MemoryStorage()
     const drafts = new DraftStorage(() => storage)

@@ -174,6 +174,57 @@ export class DraftStorage {
     if (!storageResult.ok) return fail(storageResult)
 
     const storage = storageResult.storage
+    let backupPlan
+    try {
+      backupPlan = this.keysWithPrefix(storage, BACKUP_PREFIX)
+        .map(sourceKey => {
+          const sourcePath = sourceKey.slice(BACKUP_PREFIX.length)
+          if (!this.pathMatches(sourcePath, oldPath, type)) return null
+
+          const raw = storage.getItem(sourceKey)
+          if (raw === null) return null
+
+          const destinationPath = `${newPath}${sourcePath.slice(oldPath.length)}`
+          return {
+            sourceKey,
+            sourcePath,
+            destinationPath,
+            destinationKey: this.backupKey(destinationPath),
+            raw
+          }
+        })
+        .filter(Boolean)
+    } catch (error) {
+      return fail({ ok: false, error })
+    }
+    for (const item of backupPlan) {
+      if (item.sourcePath !== item.destinationPath && !affectedPaths.includes(item.destinationPath)) {
+        affectedPaths.push(item.destinationPath)
+      }
+    }
+
+    // Legacy backups are keyed directly by path. Preflight every destination
+    // before changing any record so an existing, unrelated recovery copy is
+    // never silently replaced.
+    for (const item of backupPlan) {
+      if (item.sourcePath === item.destinationPath) continue
+      let raw
+      try {
+        raw = storage.getItem(item.destinationKey)
+      } catch (error) {
+        return fail({ ok: false, error, sourcePath: item.sourcePath, destinationPath: item.destinationPath })
+      }
+      if (raw !== null && raw !== item.raw) {
+        return fail({
+          ok: false,
+          backupCollision: true,
+          error: new Error(`A legacy backup already exists at ${item.destinationPath}`),
+          sourcePath: item.sourcePath,
+          destinationPath: item.destinationPath
+        })
+      }
+    }
+
     let conflictPlan
     try {
       conflictPlan = this.keysWithPrefix(storage, DRAFT_CONFLICT_PREFIX)
@@ -284,6 +335,9 @@ export class DraftStorage {
         }
       }
 
+      const backupCopy = this.copyLegacyBackups(storage, backupPlan)
+      if (!backupCopy.ok) return fail(backupCopy)
+
       for (const { item } of preservedDrafts) {
         const removal = this.removeDraftIfRevision(item.sourcePath, item.draft.draftRevision)
         if (!removal.ok) return fail({ ...removal, sourcePath: item.sourcePath, destinationPath: item.destinationPath })
@@ -309,6 +363,9 @@ export class DraftStorage {
           })
         }
       }
+
+      const backupRemoval = this.removeLegacyBackupSources(storage, backupPlan)
+      if (!backupRemoval.ok) return fail(backupRemoval)
 
       const firstCollision = collisions[0]
       const conflict = preservedDrafts.find(({ item }) => item === firstCollision)?.conflict
@@ -369,6 +426,9 @@ export class DraftStorage {
       }
     }
 
+    const backupCopy = this.copyLegacyBackups(storage, backupPlan)
+    if (!backupCopy.ok) return fail(backupCopy)
+
     // Only remove sources after every destination has been confirmed. A failed
     // removal leaves two valid copies, which is safer than losing the draft.
     for (const item of plan) {
@@ -399,11 +459,115 @@ export class DraftStorage {
       }
     }
 
+    const backupRemoval = this.removeLegacyBackupSources(storage, backupPlan)
+    if (!backupRemoval.ok) return fail(backupRemoval)
+
     return {
       ok: true,
       remapped: plan.filter(item => item.sourcePath !== item.destinationPath).length +
-        conflictPlan.filter(item => item.sourcePath !== item.destinationPath).length
+        conflictPlan.filter(item => item.sourcePath !== item.destinationPath).length +
+        backupPlan.filter(item => item.sourcePath !== item.destinationPath).length
     }
+  }
+
+  copyLegacyBackups(storage, plan) {
+    for (const item of plan) {
+      if (item.sourcePath === item.destinationPath) continue
+
+      let sourceRaw
+      let destinationRaw
+      try {
+        sourceRaw = storage.getItem(item.sourceKey)
+        destinationRaw = storage.getItem(item.destinationKey)
+      } catch (error) {
+        return { ok: false, error, sourcePath: item.sourcePath, destinationPath: item.destinationPath }
+      }
+      if (sourceRaw !== item.raw) {
+        return {
+          ok: false,
+          error: new Error(`The legacy backup at ${item.sourcePath} changed while it was being moved`),
+          sourcePath: item.sourcePath,
+          destinationPath: item.destinationPath
+        }
+      }
+      if (destinationRaw !== null && destinationRaw !== item.raw) {
+        return {
+          ok: false,
+          backupCollision: true,
+          error: new Error(`A legacy backup already exists at ${item.destinationPath}`),
+          sourcePath: item.sourcePath,
+          destinationPath: item.destinationPath
+        }
+      }
+
+      if (destinationRaw === null) {
+        try {
+          storage.setItem(item.destinationKey, item.raw)
+        } catch (error) {
+          return { ok: false, error, sourcePath: item.sourcePath, destinationPath: item.destinationPath }
+        }
+      }
+
+      let verification
+      try {
+        verification = storage.getItem(item.destinationKey)
+      } catch (error) {
+        return { ok: false, error, sourcePath: item.sourcePath, destinationPath: item.destinationPath }
+      }
+      if (verification !== item.raw) {
+        return {
+          ok: false,
+          error: new Error(`Unable to verify the legacy backup at ${item.destinationPath}`),
+          sourcePath: item.sourcePath,
+          destinationPath: item.destinationPath
+        }
+      }
+    }
+    return { ok: true }
+  }
+
+  removeLegacyBackupSources(storage, plan) {
+    for (const item of plan) {
+      if (item.sourcePath === item.destinationPath) continue
+
+      let sourceRaw
+      try {
+        sourceRaw = storage.getItem(item.sourceKey)
+      } catch (error) {
+        return { ok: false, error, sourcePath: item.sourcePath, destinationPath: item.destinationPath }
+      }
+      if (sourceRaw === null) continue
+      if (sourceRaw !== item.raw) {
+        return {
+          ok: false,
+          error: new Error(`The legacy backup at ${item.sourcePath} changed before it could be moved`),
+          sourcePath: item.sourcePath,
+          destinationPath: item.destinationPath
+        }
+      }
+
+      try {
+        storage.removeItem(item.sourceKey)
+      } catch (error) {
+        return { ok: false, error, sourcePath: item.sourcePath, destinationPath: item.destinationPath }
+      }
+
+      let remaining
+      try {
+        remaining = storage.getItem(item.sourceKey)
+      } catch (error) {
+        return { ok: false, error, sourcePath: item.sourcePath, destinationPath: item.destinationPath }
+      }
+      if (remaining !== null) {
+        return {
+          ok: false,
+          error: new Error(`Unable to remove the legacy backup at ${item.sourcePath}`),
+          sourcePath: item.sourcePath,
+          destinationPath: item.destinationPath
+        }
+      }
+    }
+    return { ok: true }
   }
 
   // Remove a file's drafts, or drafts for a folder and its descendants. Also
