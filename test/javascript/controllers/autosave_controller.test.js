@@ -245,13 +245,19 @@ describe("AutosaveController — Content Loss Detection", () => {
     })
 
     it("does not rewrite an unchanged draft for repeated lifecycle events", () => {
-      const setItem = vi.spyOn(localStorage, "setItem")
+      expect(draftStorage.readDraft("lifecycle.md").draft).toBeNull()
       Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" })
 
       document.dispatchEvent(new Event("visibilitychange"))
+      const firstDraft = draftStorage.readDraft("lifecycle.md").draft
+      expect(firstDraft).toMatchObject({
+        content: "local content",
+        baseRevision: "revision-lifecycle"
+      })
+
       window.dispatchEvent(new Event("pagehide"))
 
-      expect(setItem).toHaveBeenCalledTimes(1)
+      expect(draftStorage.readDraft("lifecycle.md").draft).toEqual(firstDraft)
     })
 
     it("shows a storage error and requests a best-effort unload warning when persistence fails", () => {
