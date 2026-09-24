@@ -26,6 +26,10 @@ export default class extends Controller {
     this.dialogTarget.showModal()
   }
 
+  preventDismiss(event) {
+    event.preventDefault()
+  }
+
   acceptServer() {
     const detail = {
       source: "server",
@@ -47,6 +51,7 @@ export default class extends Controller {
       source: this._source,
       path: this._path,
       content: this._backupContent,
+      backupContent: this._backupContent,
       draftRevision: this._draftRevision,
       backupTimestamp: this._backupTimestamp
     }
