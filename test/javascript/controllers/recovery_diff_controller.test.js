@@ -13,7 +13,7 @@ describe("RecoveryDiffController", () => {
   beforeEach(async () => {
     document.body.innerHTML = `
       <div data-controller="recovery-diff">
-        <dialog data-recovery-diff-target="dialog">
+        <dialog data-recovery-diff-target="dialog" data-action="cancel->recovery-diff#preventDismiss">
           <div data-recovery-diff-target="serverText"></div>
           <div data-recovery-diff-target="backupText"></div>
           <span data-recovery-diff-target="backupTimestamp"></span>
@@ -33,8 +33,8 @@ describe("RecoveryDiffController", () => {
 
     // Mock showModal/close since jsdom doesn't support <dialog> fully
     const dialog = container.querySelector("dialog")
-    dialog.showModal = vi.fn()
-    dialog.close = vi.fn()
+    dialog.showModal = vi.fn(function() { this.setAttribute("open", "") })
+    dialog.close = vi.fn(function() { this.removeAttribute("open") })
   })
 
   afterEach(() => {
@@ -94,6 +94,23 @@ describe("RecoveryDiffController", () => {
 
       expect(dialog.showModal).toHaveBeenCalled()
     })
+
+    it("prevents Escape from dismissing recovery before an explicit choice", () => {
+      const dialog = container.querySelector("dialog")
+      controller.open({
+        path: "test.md",
+        serverContent: "server",
+        backupContent: "backup",
+        backupTimestamp: Date.now()
+      })
+
+      const cancelEvent = new Event("cancel", { cancelable: true })
+      dialog.dispatchEvent(cancelEvent)
+
+      expect(cancelEvent.defaultPrevented).toBe(true)
+      expect(dialog.open).toBe(true)
+      expect(dialog.close).not.toHaveBeenCalled()
+    })
   })
 
   describe("acceptServer()", () => {
@@ -145,6 +162,7 @@ describe("RecoveryDiffController", () => {
           source: "backup",
           path: "test.md",
           content: "my backup content",
+          backupContent: "my backup content",
           draftRevision: null,
           backupTimestamp: timestamp
         }

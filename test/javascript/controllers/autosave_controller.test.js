@@ -12,6 +12,7 @@ vi.mock("@codemirror/commands", () => ({
 }))
 
 import AutosaveController from "../../../app/javascript/controllers/autosave_controller"
+import RecoveryDiffController from "../../../app/javascript/controllers/recovery_diff_controller"
 
 function ensureLocalStorage() {
   if (typeof globalThis.localStorage !== "undefined" && typeof globalThis.localStorage.clear === "function") return
@@ -55,9 +56,16 @@ describe("AutosaveController — Content Loss Detection", () => {
 
     // Setup minimal DOM with only the targets needed for autosave
     document.body.innerHTML = `
-      <div data-controller="autosave">
+      <div data-controller="autosave" data-autosave-recovery-diff-outlet='[data-controller~="recovery-diff"]'>
         <div data-autosave-target="contentLossBanner" class="hidden"></div>
         <span data-autosave-target="saveStatus" class="hidden"></span>
+        <div data-controller="recovery-diff" data-action="recovery-diff:resolved->autosave#onRecoveryResolved">
+          <dialog data-recovery-diff-target="dialog" data-action="cancel->recovery-diff#preventDismiss">
+            <div data-recovery-diff-target="serverText"></div>
+            <div data-recovery-diff-target="backupText"></div>
+            <span data-recovery-diff-target="backupTimestamp"></span>
+          </dialog>
+        </div>
       </div>
     `
 
@@ -66,6 +74,11 @@ describe("AutosaveController — Content Loss Detection", () => {
     // Setup Stimulus
     application = Application.start()
     application.register("autosave", AutosaveController)
+    application.register("recovery-diff", RecoveryDiffController)
+
+    const recoveryDialog = container.querySelector("dialog")
+    recoveryDialog.showModal = vi.fn(function() { this.setAttribute("open", "") })
+    recoveryDialog.close = vi.fn(function() { this.removeAttribute("open") })
 
     // Wait for Stimulus to initialize
     await new Promise((resolve) => setTimeout(resolve, 10))
@@ -556,6 +569,33 @@ describe("AutosaveController — Content Loss Detection", () => {
       expect(draftStorage.readDraft("test.md").draft.draftRevision).toBe(write.draft.draftRevision)
     })
 
+    it("keeps a divergent draft recoverable after Escape is canceled and an edit schedules autosave", async () => {
+      vi.useFakeTimers()
+      const original = draftStorage.writeDraft("test.md", "original divergent draft", "old-baseline")
+      controller.setFile("test.md", "server version", "new-baseline")
+
+      expect(controller.recoverDraft("server version", "new-baseline")).toBe("server version")
+
+      const dialog = container.querySelector("dialog")
+      expect(dialog.open).toBe(true)
+      const cancelEvent = new Event("cancel", { cancelable: true })
+      dialog.dispatchEvent(cancelEvent)
+
+      expect(cancelEvent.defaultPrevented).toBe(true)
+      expect(dialog.open).toBe(true)
+
+      mockCodemirrorValue = "edit after attempted dismissal"
+      controller.scheduleAutoSave()
+      await vi.advanceTimersByTimeAsync(AutosaveController.SAVE_DEBOUNCE_MS + AutosaveController.DRAFT_DEBOUNCE_MS)
+
+      expect(global.fetch).not.toHaveBeenCalled()
+      expect(draftStorage.readDraft("test.md").draft).toMatchObject({
+        content: "original divergent draft",
+        baseRevision: "old-baseline",
+        draftRevision: original.draft.draftRevision
+      })
+    })
+
     it("prefers a draft over a stale legacy backup and removes the superseded backup", () => {
       const write = draftStorage.writeDraft("test.md", "new draft", "baseline")
       localStorage.setItem("frankmd:backup:test.md", JSON.stringify({ content: "old backup", timestamp: write.draft.updatedAt - 1 }))
@@ -890,7 +930,9 @@ describe("AutosaveController — Content Loss Detection", () => {
         path: "test.md",
         serverContent: "server content",
         backupContent: "backup content",
-        backupTimestamp: 1700000000000
+        backupTimestamp: 1700000000000,
+        source: "backup",
+        draftRevision: null
       })
     })
 
@@ -929,6 +971,31 @@ describe("AutosaveController — Content Loss Detection", () => {
       expect(controller.hasUnsavedChanges).toBe(true)
       expect(draftStorage.readDraft("test.md").draft).toMatchObject({ content: "backup content", baseRevision: "server-revision" })
       expect(localStorage.getItem("frankmd:backup:test.md")).toBeNull()
+    })
+
+    it("consumes an accepted legacy backup and does not offer it again", () => {
+      controller.setFile("test.md", "server content", "server-revision")
+      const timestamp = Date.now()
+      const backup = { content: "backup content", timestamp }
+      localStorage.setItem("frankmd:backup:test.md", JSON.stringify(backup))
+
+      const recoveryElement = container.querySelector('[data-controller~="recovery-diff"]')
+      const recoveryController = application.getControllerForElementAndIdentifier(recoveryElement, "recovery-diff")
+      controller.getRecoveryDiffController = () => recoveryController
+      expect(controller.recoverDraft("server content", "server-revision")).toBe("server content")
+      const dialog = recoveryElement.querySelector("dialog")
+      expect(dialog.showModal).toHaveBeenCalledTimes(1)
+
+      recoveryController.acceptBackup()
+
+      expect(localStorage.getItem("frankmd:backup:test.md")).toBeNull()
+      expect(draftStorage.readDraft("test.md").draft).toMatchObject({
+        content: "backup content",
+        baseRevision: "server-revision"
+      })
+
+      expect(controller.recoverDraft("server content", "server-revision")).toBe("backup content")
+      expect(dialog.showModal).toHaveBeenCalledTimes(1)
     })
   })
 
