@@ -661,6 +661,37 @@ describe("FileOperationsController", () => {
 
       expect(controller.renameDialogTarget.close).toHaveBeenCalled()
     })
+
+    it("flushes the active draft before sending a rename request", async () => {
+      const autosave = { prepareForTransition: vi.fn(() => ({ ok: true })) }
+      controller.getAppController = () => ({
+        currentFile: "test.md",
+        getAutosaveController: () => autosave
+      })
+      controller.contextItem = { path: "test.md", type: "file" }
+      controller.renameInputTarget.value = "renamed"
+
+      await controller.submitRename()
+
+      expect(autosave.prepareForTransition).toHaveBeenCalledOnce()
+      expect(global.fetch).toHaveBeenCalledOnce()
+    })
+
+    it("does not rename an active file when its draft cannot be persisted", async () => {
+      const autosave = { prepareForTransition: vi.fn(() => ({ ok: false, error: new Error("storage unavailable") })) }
+      controller.getAppController = () => ({
+        currentFile: "test.md",
+        getAutosaveController: () => autosave
+      })
+      global.alert = vi.fn()
+      controller.contextItem = { path: "test.md", type: "file" }
+      controller.renameInputTarget.value = "renamed"
+
+      await controller.submitRename()
+
+      expect(global.fetch).not.toHaveBeenCalled()
+      expect(autosave.prepareForTransition).toHaveBeenCalledOnce()
+    })
   })
 
   describe("deleteItem()", () => {
@@ -708,6 +739,35 @@ describe("FileOperationsController", () => {
 
       expect(handler).toHaveBeenCalled()
       expect(handler.mock.calls[0][0].detail.path).toBe("test.md")
+    })
+
+    it("persists the active draft before sending a delete request", async () => {
+      const autosave = { prepareForTransition: vi.fn(() => ({ ok: true })) }
+      controller.getAppController = () => ({
+        currentFile: "test.md",
+        getAutosaveController: () => autosave
+      })
+      controller.contextItem = { path: "test.md", type: "file" }
+
+      await controller.deleteItem()
+
+      expect(autosave.prepareForTransition).toHaveBeenCalledOnce()
+      expect(global.fetch).toHaveBeenCalledOnce()
+    })
+
+    it("does not delete an active file when its draft cannot be persisted", async () => {
+      const autosave = { prepareForTransition: vi.fn(() => ({ ok: false, error: new Error("storage unavailable") })) }
+      controller.getAppController = () => ({
+        currentFile: "test.md",
+        getAutosaveController: () => autosave
+      })
+      global.alert = vi.fn()
+      controller.contextItem = { path: "test.md", type: "file" }
+
+      await controller.deleteItem()
+
+      expect(global.fetch).not.toHaveBeenCalled()
+      expect(autosave.prepareForTransition).toHaveBeenCalledOnce()
     })
   })
 

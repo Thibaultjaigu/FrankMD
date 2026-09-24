@@ -556,6 +556,81 @@ describe("AutosaveController — Content Loss Detection", () => {
       expect(draftStorage.readDraft("test.md").draft.draftRevision).toBe(write.draft.draftRevision)
     })
 
+    it("opens a collision recovery choice and promotes the selected moved draft safely", () => {
+      const recovery = { open: vi.fn() }
+      controller.getRecoveryDiffController = () => recovery
+      vi.spyOn(console, "error").mockImplementation(() => {})
+      controller.setFile("old.md", "source server", "source-revision")
+      mockCodemirrorValue = "source local draft"
+      const source = draftStorage.writeDraft("old.md", "source local draft", "source-revision").draft
+      const destination = draftStorage.writeDraft("new.md", "destination local draft", "destination-revision").draft
+
+      controller.renameFile("old.md", "new.md", "file")
+      const conflict = draftStorage.listDraftConflicts("new.md").conflicts[0]
+
+      expect(recovery.open).toHaveBeenCalledWith(expect.objectContaining({
+        path: "new.md",
+        serverContent: "source server",
+        backupContent: "source local draft",
+        source: "draft-conflict",
+        conflictId: conflict.conflictId
+      }))
+      expect(draftStorage.readDraft("old.md").draft).toBeNull()
+      expect(draftStorage.listDraftConflicts("new.md").conflicts).toContainEqual(expect.objectContaining({
+        sourcePath: "old.md",
+        content: source.content
+      }))
+      expect(draftStorage.readDraft("new.md").draft).toEqual(destination)
+
+      controller.resolveDraftConflict({
+        path: "new.md",
+        conflictId: conflict.conflictId,
+        draftRevision: conflict.draftRevision,
+        content: conflict.content,
+        accepted: true
+      })
+
+      expect(draftStorage.readDraft("new.md").draft.content).toBe("source local draft")
+      expect(draftStorage.readDraft("old.md").draft).toBeNull()
+      expect(draftStorage.listDraftConflicts("new.md").conflicts).toEqual([
+        expect.objectContaining({
+          sourcePath: "new.md",
+          content: "destination local draft",
+          draftRevision: destination.draftRevision
+        })
+      ])
+      expect(controller._draftBlockedPaths.has("new.md")).toBe(false)
+    })
+
+    it("keeps the destination draft as a recovery copy when the user chooses the server version", () => {
+      vi.spyOn(console, "error").mockImplementation(() => {})
+      controller.setFile("old.md", "source server", "source-revision")
+      mockCodemirrorValue = "source local draft"
+      const source = draftStorage.writeDraft("old.md", "source local draft", "source-revision").draft
+      const destination = draftStorage.writeDraft("new.md", "destination local draft", "destination-revision").draft
+      controller.renameFile("old.md", "new.md", "file")
+      const conflict = draftStorage.listDraftConflicts("new.md").conflicts[0]
+
+      controller.onRecoveryResolved({ detail: {
+        source: "server",
+        path: "new.md",
+        serverContent: "source server",
+        conflictId: conflict.conflictId,
+        draftRevision: conflict.draftRevision
+      } })
+
+      expect(mockCodemirrorController.setValue).toHaveBeenCalledWith("source server")
+      expect(draftStorage.readDraft("old.md").draft).toBeNull()
+      expect(draftStorage.readDraft("new.md").draft).toBeNull()
+      expect(draftStorage.listDraftConflicts("new.md").conflicts).toEqual([
+        expect.objectContaining({
+          content: "destination local draft",
+          draftRevision: destination.draftRevision
+        })
+      ])
+      expect(draftStorage.listDraftConflicts("new.md").conflicts[0].draftRevision).not.toBe(source.draftRevision)
+    })
+
     it("prefers a draft over a stale legacy backup and removes the superseded backup", () => {
       const write = draftStorage.writeDraft("test.md", "new draft", "baseline")
       localStorage.setItem("frankmd:backup:test.md", JSON.stringify({ content: "old backup", timestamp: write.draft.updatedAt - 1 }))
@@ -1052,6 +1127,7 @@ describe("AutosaveController — Content Loss Detection", () => {
     })
 
     it("renames a pending autosave without clearing dirty state", async () => {
+      controller.setFile("foo.md", "saved content", "revision-foo")
       controller.scheduleAutoSave()
 
       expect(controller.renameFile("foo.md", "bar.md", "file")).toBe(true)
@@ -1069,7 +1145,7 @@ describe("AutosaveController — Content Loss Detection", () => {
     })
 
     it("remaps a pending autosave inside a renamed folder", async () => {
-      controller.setFile("docs/foo.md", "saved content")
+      controller.setFile("docs/foo.md", "saved content", "revision-docs")
       controller.scheduleAutoSave()
 
       expect(controller.renameFile("docs", "archive", "folder")).toBe(true)
@@ -1083,6 +1159,48 @@ describe("AutosaveController — Content Loss Detection", () => {
       expect(global.fetch.mock.calls[0][0]).not.toContain("/notes/docs/foo.md")
     })
 
+    it("moves the active local draft before scheduling a save at the renamed path", async () => {
+      controller.setFile("foo.md", "saved content", "revision-foo")
+      controller.scheduleAutoSave()
+      controller.flushDraftWrite("foo.md", "edited content", "revision-foo")
+      const original = draftStorage.readDraft("foo.md").draft
+
+      expect(controller.renameFile("foo.md", "bar.md", "file")).toBe(true)
+
+      expect(draftStorage.readDraft("foo.md").draft).toBeNull()
+      expect(draftStorage.readDraft("bar.md").draft).toEqual({ ...original, path: "bar.md" })
+      expect(controller.currentFile).toBe("bar.md")
+      expect(controller.saveTimeout).not.toBeNull()
+
+      await vi.advanceTimersByTimeAsync(AutosaveController.SAVE_DEBOUNCE_MS)
+
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+      expect(global.fetch.mock.calls[0][0]).toContain("/notes/bar.md")
+    })
+
+    it("does not overwrite a destination draft collision and blocks local writes there", () => {
+      controller.setFile("foo.md", "saved content", "revision-source")
+      controller.flushDraftWrite("foo.md", "source edit", "revision-source")
+      const source = draftStorage.readDraft("foo.md").draft
+      const destination = draftStorage.writeDraft("bar.md", "other note draft", "revision-destination").draft
+      vi.spyOn(console, "error").mockImplementation(() => {})
+      mockCodemirrorValue = "source edit"
+
+      expect(controller.renameFile("foo.md", "bar.md", "file")).toBe(true)
+
+      expect(controller.currentFile).toBe("bar.md")
+      expect(draftStorage.readDraft("foo.md").draft).toBeNull()
+      expect(draftStorage.listDraftConflicts("bar.md").conflicts).toContainEqual(expect.objectContaining({
+        sourcePath: "foo.md",
+        content: source.content
+      }))
+      expect(draftStorage.readDraft("bar.md").draft).toEqual(destination)
+      expect(controller._draftBlockedPaths.has("bar.md")).toBe(true)
+      expect(controller.saveTimeout).toBeNull()
+      expect(controller.writeDraftSnapshot({ path: "bar.md", content: "new edit", baseRevision: "revision-source" }).ok).toBe(false)
+      expect(draftStorage.readDraft("bar.md").draft).toEqual(destination)
+    })
+
     it("does not remap a path that only shares a folder prefix", () => {
       controller.setFile("docs-old/foo.md", "saved content")
 
@@ -1093,7 +1211,7 @@ describe("AutosaveController — Content Loss Detection", () => {
     it("clears a pending autosave when the note is deleted", async () => {
       controller.scheduleAutoSave()
 
-      expect(controller.deleteFile("foo.md", "file")).toBe(true)
+      expect(controller.deleteFile("foo.md", "file")).toMatchObject({ ok: true })
       expect(controller.currentFile).toBeNull()
       expect(controller.saveTimeout).toBeNull()
       expect(controller.saveMaxIntervalTimeout).toBeNull()
@@ -1102,6 +1220,29 @@ describe("AutosaveController — Content Loss Detection", () => {
       await vi.advanceTimersByTimeAsync(AutosaveController.SAVE_DEBOUNCE_MS)
 
       expect(global.fetch).not.toHaveBeenCalled()
+    })
+
+    it("removes file drafts and legacy backups after a successful deletion", () => {
+      controller.setFile("foo.md", "saved content", "revision-foo")
+      draftStorage.writeDraft("foo.md", "edited content", "revision-foo")
+      draftStorage.writeBackup("foo.md", "offline content")
+
+      expect(controller.deleteFile("foo.md", "file")).toMatchObject({ ok: true, removed: 2 })
+      expect(controller.currentFile).toBeNull()
+      expect(draftStorage.readDraft("foo.md").draft).toBeNull()
+      expect(draftStorage.readBackup("foo.md").backup).toBeNull()
+    })
+
+    it("clears active state even when local deletion cleanup fails", () => {
+      controller.setFile("foo.md", "saved content", "revision-foo")
+      const error = new Error("storage unavailable")
+      vi.spyOn(draftStorage, "removeDrafts").mockReturnValue({ ok: false, error, removed: 0 })
+      vi.spyOn(console, "error").mockImplementation(() => {})
+
+      expect(controller.deleteFile("foo.md", "file")).toMatchObject({ ok: false, error })
+      expect(controller.currentFile).toBeNull()
+      expect(controller.hasUnsavedChanges).toBe(false)
+      expect(controller.saveTimeout).toBeNull()
     })
 
     it("ignores a late response from a save started before deletion", async () => {
@@ -1138,6 +1279,30 @@ describe("AutosaveController — Content Loss Detection", () => {
       expect(controller.currentFile).toBe("bar.md")
       expect(controller.hasUnsavedChanges).toBe(true)
       expect(controller.saveTimeout).not.toBeNull()
+    })
+
+    it("keeps the remapped newer draft when an old-path save response arrives", async () => {
+      let resolveFetch
+      global.fetch = vi.fn().mockImplementation(() => new Promise((resolve) => {
+        resolveFetch = resolve
+      }))
+
+      controller.setFile("foo.md", "saved content", "revision-foo")
+      controller.scheduleAutoSave()
+      const savePromise = controller.saveNow()
+      mockCodemirrorValue = "newer edit"
+      controller.scheduleAutoSave()
+      controller.renameFile("foo.md", "bar.md", "file")
+      const movedDraft = draftStorage.readDraft("bar.md").draft
+
+      resolveFetch({ ok: true, json: () => Promise.resolve({ revision: "new-server-revision" }) })
+      await savePromise
+
+      expect(controller.currentFile).toBe("bar.md")
+      expect(draftStorage.readDraft("foo.md").draft).toBeNull()
+      expect(draftStorage.readDraft("bar.md").draft).toEqual(movedDraft)
+      expect(movedDraft.content).toBe("newer edit")
+      expect(controller.hasUnsavedChanges).toBe(true)
     })
   })
 })

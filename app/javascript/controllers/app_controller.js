@@ -1467,13 +1467,10 @@ export default class extends Controller {
     )
     const autosave = this.getAutosaveController()
 
-    if (activeFileWasDeleted) {
-      if (!autosave || typeof autosave.prepareForTransition !== "function") return
-      const result = autosave.prepareForTransition()
-      if (!result.ok) return
+    const cleanup = autosave?.deleteFile(path, type)
+    if (cleanup && !cleanup.ok) {
+      this.showTemporaryMessage(window.t("status.draft_storage_error"), 5000)
     }
-
-    autosave?.deleteFile(path, type)
 
     // Clear editor if deleted file was currently open
     if (activeFileWasDeleted) {

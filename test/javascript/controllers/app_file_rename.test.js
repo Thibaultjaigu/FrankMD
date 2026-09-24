@@ -136,8 +136,7 @@ describe("onFileRenamed: autosave synchronization", () => {
 
   it("clears autosave when the active file is deleted", () => {
     const autosave = {
-      prepareForTransition: vi.fn(() => ({ ok: true })),
-      deleteFile: vi.fn()
+      deleteFile: vi.fn(() => ({ ok: true }))
     }
     const app = {
       currentFile: "foo.md",
@@ -156,20 +155,20 @@ describe("onFileRenamed: autosave synchronization", () => {
     })
 
     expect(app.currentFile).toBeNull()
-    expect(autosave.prepareForTransition).toHaveBeenCalledOnce()
     expect(autosave.deleteFile).toHaveBeenCalledWith("foo.md", "file")
     expect(app.updateUrl).toHaveBeenCalledWith(null, { replace: true })
   })
 
-  it("keeps the active editor visible if its draft cannot be flushed before deletion clears it", () => {
+  it("clears the active editor after a successful deletion without flushing a deleted path", () => {
     const autosave = {
       prepareForTransition: vi.fn(() => ({ ok: false, error: new Error("storage unavailable") })),
-      deleteFile: vi.fn()
+      deleteFile: vi.fn(() => ({ ok: true }))
     }
     const app = {
       currentFile: "foo.md",
       getAutosaveController: () => autosave,
       updatePathDisplay: vi.fn(),
+      updateUrl: vi.fn(),
       editorPlaceholderTarget: { classList: { remove: vi.fn() } },
       editorTarget: { classList: { add: vi.fn() } },
       hideStatsPanel: vi.fn()
@@ -179,8 +178,9 @@ describe("onFileRenamed: autosave synchronization", () => {
       detail: { path: "foo.md", type: "file" }
     })
 
-    expect(app.currentFile).toBe("foo.md")
-    expect(app.editorPlaceholderTarget.classList.remove).not.toHaveBeenCalled()
-    expect(autosave.deleteFile).not.toHaveBeenCalled()
+    expect(app.currentFile).toBeNull()
+    expect(app.editorPlaceholderTarget.classList.remove).toHaveBeenCalled()
+    expect(autosave.prepareForTransition).not.toHaveBeenCalled()
+    expect(autosave.deleteFile).toHaveBeenCalledWith("foo.md", "file")
   })
 })

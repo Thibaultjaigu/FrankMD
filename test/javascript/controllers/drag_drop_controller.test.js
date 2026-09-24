@@ -502,6 +502,39 @@ describe("DragDropController", () => {
 
       expect(global.alert).toHaveBeenCalledWith("Network error")
     })
+
+    it("does not move an active file when its local draft cannot be persisted", async () => {
+      const autosave = { prepareForTransition: vi.fn(() => ({ ok: false, error: new Error("storage unavailable") })) }
+      global.fetch = vi.fn()
+      controller.getAppController = () => ({
+        currentFile: "folder1/file1.md",
+        getAutosaveController: () => autosave
+      })
+      global.alert = vi.fn()
+
+      await controller.moveItem("folder1/file1.md", "folder2/file1.md", "file")
+
+      expect(global.fetch).not.toHaveBeenCalled()
+      expect(autosave.prepareForTransition).toHaveBeenCalledOnce()
+    })
+
+    it("resumes active autosave if a move request fails", async () => {
+      const resumeAfterTransition = vi.fn()
+      const autosave = {
+        prepareForTransition: vi.fn(() => ({ ok: true })),
+        resumeAfterTransition
+      }
+      controller.getAppController = () => ({
+        currentFile: "folder1/file1.md",
+        getAutosaveController: () => autosave
+      })
+      global.fetch = vi.fn().mockRejectedValue(new Error("Network error"))
+      global.alert = vi.fn()
+
+      await controller.moveItem("folder1/file1.md", "folder2/file1.md", "file")
+
+      expect(resumeAfterTransition).toHaveBeenCalledOnce()
+    })
   })
 
   describe("disconnect()", () => {

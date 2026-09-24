@@ -31,6 +31,7 @@ export default class extends Controller {
       overrideContent: null
     }
     this._draftPersistenceFailures = new Set()
+    this._draftBlockedPaths = new Set()
     this._draftStorageErrorVisible = false
     this._offlineBackupTimeout = null
     this._draftWriteTimeouts = new Map()
@@ -167,15 +168,61 @@ export default class extends Controller {
   renameFile(oldPath, newPath, type = "file") {
     const currentPath = this.currentFile
     const remappedPath = this.remapPath(currentPath, oldPath, newPath, type)
+    const cm = this.getCodemirrorController()
+    const activeDraftFlush = remappedPath !== currentPath
+      ? this.flushDraftWrite(currentPath, cm ? cm.getValue() : "", this._baseRevision)
+      : { ok: true }
+    const remapResult = activeDraftFlush.ok
+      ? draftStorage.remapDrafts(oldPath, newPath, type)
+      : activeDraftFlush
+    if (!remapResult.ok) {
+      const affectedPaths = remapResult.affectedPaths?.length
+        ? remapResult.affectedPaths
+        : (remappedPath !== currentPath ? [remappedPath] : [])
+      for (const path of affectedPaths) this._draftBlockedPaths.add(path)
+      if (remappedPath !== currentPath) {
+        this.clearPendingTimers()
+        this._draftPersistenceFailures.add(remappedPath)
+        this._draftRevision = null
+      }
+      this.updateBeforeUnloadListener()
+      this.showDraftStorageError(remapResult.error)
+    }
     if (remappedPath === currentPath) return false
 
     this.currentFile = remappedPath
     this._fileVersion += 1
+    if (this._baseRevision) this._knownBaseRevisions.set(remappedPath, this._baseRevision)
+    this.updateBeforeUnloadListener()
+
+    if (remapResult.ok) {
+      const movedDraft = draftStorage.readDraft(remappedPath)
+      this._draftRevision = movedDraft.ok ? movedDraft.draft?.draftRevision ?? null : null
+      this._draftPersistenceFailures.delete(remappedPath)
+    }
+
     if (this._scheduledSaveSnapshot?.path === currentPath) {
       this._scheduledSaveSnapshot = {
         ...this._scheduledSaveSnapshot,
         path: remappedPath,
         fileVersion: this._fileVersion
+      }
+    }
+
+    if (remapResult.ok && this.hasUnsavedChanges) this.scheduleAutoSave()
+    if (remapResult.collision && remappedPath === this.currentFile) {
+      const conflicts = draftStorage.listDraftConflicts(remappedPath)
+      if (conflicts.ok && conflicts.conflicts.length > 0) {
+        const conflict = conflicts.conflicts[conflicts.conflicts.length - 1]
+        this.openRecovery({
+          path: remappedPath,
+          serverContent: this._lastSavedContent ?? "",
+          content: conflict.content,
+          timestamp: conflict.updatedAt,
+          source: "draft-conflict",
+          draftRevision: conflict.draftRevision,
+          conflictId: conflict.conflictId
+        })
       }
     }
     return true
@@ -185,20 +232,31 @@ export default class extends Controller {
   // cannot be cancelled reliably, so saveNow() also verifies its captured file
   // version before applying a response.
   deleteFile(path, type = "file") {
-    if (!this.pathMatches(this.currentFile, path, type)) return false
+    const cleanup = draftStorage.removeDrafts(path, type)
+    const deletesActiveFile = this.pathMatches(this.currentFile, path, type)
 
-    const backupController = this.getOfflineBackupController()
-    if (backupController) backupController.clear(this.currentFile)
+    if (deletesActiveFile) {
+      this.clearPendingTimers()
+      this.clearDraftWriteTimeout(this.currentFile)
+      this.currentFile = null
+      this._lastSavedContent = null
+      this._baseRevision = null
+      this._draftRevision = null
+      this.hasUnsavedChanges = false
+      this._fileVersion += 1
+      this.dismissContentLossWarning()
+      this.showSaveStatus("")
+      this.updateBeforeUnloadListener()
+    }
 
-    this.clearPendingTimers()
-    this.currentFile = null
-    this._lastSavedContent = null
-    this.hasUnsavedChanges = false
-    this._fileVersion += 1
-    this.dismissContentLossWarning()
-    this.showSaveStatus("")
-    this.updateBeforeUnloadListener()
-    return true
+    if (!cleanup.ok) this.showDraftStorageError(cleanup.error)
+    return cleanup
+  }
+
+  // Rename/delete requests pause autosave after flushing a local snapshot.
+  // If the server rejects the operation, let the still-active file resume.
+  resumeAfterTransition() {
+    if (this.currentFile && this.hasUnsavedChanges) this.scheduleAutoSave()
   }
 
   remapPath(path, oldPath, newPath, type = "file") {
@@ -298,6 +356,14 @@ export default class extends Controller {
   }
 
   writeDraftSnapshot(snapshot) {
+    if (this._draftBlockedPaths.has(snapshot.path)) {
+      const error = new Error(`Draft persistence is blocked for ${snapshot.path} until its recovery conflict is resolved`)
+      this._draftPersistenceFailures.add(snapshot.path)
+      this.updateBeforeUnloadListener()
+      if (snapshot.path === this.currentFile) this.showDraftStorageError(error)
+      return { ok: false, error }
+    }
+
     const latestBaseRevision = this._knownBaseRevisions.get(snapshot.path)
     const baseRevision = latestBaseRevision || snapshot.baseRevision
     const result = draftStorage.writeDraft(snapshot.path, snapshot.content, baseRevision)
@@ -402,24 +468,45 @@ export default class extends Controller {
     return backup
   }
 
-  openRecovery({ path, serverContent, content, timestamp, source, draftRevision = null }) {
+  openRecovery({ path, serverContent, content, timestamp, source, draftRevision = null, conflictId = null }) {
     const recovery = this.getRecoveryDiffController()
     if (!recovery) return false
 
-    recovery.open({
+    const recoveryOptions = {
       path,
       serverContent,
       backupContent: content,
       backupTimestamp: timestamp,
       source,
       draftRevision
-    })
+    }
+    if (conflictId) recoveryOptions.conflictId = conflictId
+    recovery.open(recoveryOptions)
     return true
   }
 
   recoverDraft(serverContent, serverRevision) {
     const path = this.currentFile
     if (!path) return serverContent
+
+    const conflictsResult = draftStorage.listDraftConflicts(path)
+    if (!conflictsResult.ok) {
+      this.showDraftStorageError(conflictsResult.error)
+      return serverContent
+    }
+    if (conflictsResult.conflicts.length > 0) {
+      const conflict = conflictsResult.conflicts[conflictsResult.conflicts.length - 1]
+      this.openRecovery({
+        path,
+        serverContent,
+        content: conflict.content,
+        timestamp: conflict.updatedAt,
+        source: "draft-conflict",
+        draftRevision: conflict.draftRevision,
+        conflictId: conflict.conflictId
+      })
+      return serverContent
+    }
 
     const readResult = draftStorage.readDraft(path)
     if (!readResult.ok) {
@@ -648,6 +735,7 @@ export default class extends Controller {
 
       const rebaseNewerDraft = () => {
         if (!newRevision) return
+        if (this._draftBlockedPaths.has(filePath)) return
         const latestResult = draftStorage.readDraft(filePath)
         if (!latestResult.ok) {
           if (this.currentFile === filePath) this.showDraftStorageError(latestResult.error)
@@ -800,12 +888,24 @@ export default class extends Controller {
   // === Recovery ===
 
   onRecoveryResolved(event) {
-    const { source, content, draftRevision, backupContent, backupTimestamp } = event.detail
+    const { source, content, draftRevision, backupContent, backupTimestamp, conflictId } = event.detail
     const path = this.currentFile
     const removeSelectedBackup = () => {
       if (typeof backupContent !== "string" || !Number.isFinite(backupTimestamp) || !path) return
       const result = draftStorage.removeBackupIfSnapshot(path, backupContent, backupTimestamp)
       if (!result.ok) this.showDraftStorageError(result.error)
+    }
+
+    if (conflictId) {
+      this.resolveDraftConflict({
+        path,
+        conflictId,
+        draftRevision,
+        content,
+        serverContent: event.detail.serverContent,
+        accepted: source !== "server" && typeof content === "string"
+      })
+      return
     }
 
     if (draftRevision && path) {
@@ -858,6 +958,107 @@ export default class extends Controller {
         this.scheduleAutoSave()
       }
     }
+  }
+
+  resolveDraftConflict({ path, conflictId, draftRevision, content, serverContent, accepted }) {
+    if (!path || !conflictId) return
+    const conflictsResult = draftStorage.listDraftConflicts(path)
+    if (!conflictsResult.ok) {
+      this.showDraftStorageError(conflictsResult.error)
+      return
+    }
+    const selected = conflictsResult.conflicts.find(conflict =>
+      conflict.conflictId === conflictId && conflict.draftRevision === draftRevision
+    )
+    if (!selected) {
+      this.showDraftStorageError(new Error("The recovery copy changed while the dialog was open"))
+      return
+    }
+
+    const removeSelectedConflict = () => {
+      const result = draftStorage.removeDraftConflictIfRevision(path, conflictId, draftRevision)
+      if (!result.ok) this.showDraftStorageError(result.error)
+      return result
+    }
+
+    const currentResult = draftStorage.readDraft(path)
+    if (!currentResult.ok) {
+      this.showDraftStorageError(currentResult.error)
+      return
+    }
+
+    if (!accepted || typeof content !== "string") {
+      if (currentResult.draft) {
+        if (currentResult.draft.draftRevision !== draftRevision) {
+          const preserved = draftStorage.preserveDraftConflict(path, currentResult.draft)
+          if (!preserved.ok) {
+            this.showDraftStorageError(preserved.error)
+            return
+          }
+        }
+        const primaryRemoval = draftStorage.removeDraftIfRevision(path, currentResult.draft.draftRevision)
+        if (!primaryRemoval.ok) {
+          this.showDraftStorageError(primaryRemoval.error)
+          return
+        }
+      }
+      const removal = removeSelectedConflict()
+      if (!removal.ok) return
+      if (selected.sourcePath !== path) {
+        const sourceRemoval = this.removeDraftIfRevision(selected.sourcePath, draftRevision)
+        if (!sourceRemoval.ok) return
+      }
+      const codemirrorController = this.getCodemirrorController()
+      if (typeof serverContent === "string" && codemirrorController) codemirrorController.setValue(serverContent)
+      this.hasUnsavedChanges = false
+      this._draftRevision = null
+      this._draftBlockedPaths.delete(path)
+      this._draftPersistenceFailures.delete(path)
+      this.clearDraftStorageError()
+      this.updateBeforeUnloadListener()
+      return
+    }
+
+    if (currentResult.draft && currentResult.draft.draftRevision !== draftRevision) {
+      const preserved = draftStorage.preserveDraftConflict(path, currentResult.draft)
+      if (!preserved.ok) {
+        this.showDraftStorageError(preserved.error)
+        return
+      }
+    }
+
+    const writeResult = content === this._lastSavedContent
+      ? { ok: true, draft: null }
+      : draftStorage.writeDraft(path, content, this._baseRevision)
+    if (!writeResult.ok) {
+      this.showDraftStorageError(writeResult.error)
+      return
+    }
+
+    const conflictRemoval = removeSelectedConflict()
+    if (!conflictRemoval.ok) return
+    if (selected.sourcePath !== path) {
+      const sourceRemoval = this.removeDraftIfRevision(selected.sourcePath, draftRevision)
+      if (!sourceRemoval.ok) return
+    }
+
+    this._draftRevision = writeResult.draft?.draftRevision ?? null
+    this.hasUnsavedChanges = content !== this._lastSavedContent
+    const codemirrorController = this.getCodemirrorController()
+    if (codemirrorController) codemirrorController.setValue(content)
+
+    if (this.isLargeDeletion(this._lastSavedContent, content)) {
+      this.showContentLossWarning()
+      this.clearPendingTimers()
+    } else if (this.hasUnsavedChanges) {
+      this.scheduleAutoSave()
+    }
+    // All alternatives now live under independent conflict keys, so future
+    // edits can safely use the primary key without overwriting a recovery copy.
+    this._draftBlockedPaths.delete(path)
+    this._draftPersistenceFailures.delete(path)
+    this.clearDraftStorageError()
+    this.updateBeforeUnloadListener()
   }
 
   // === UI ===

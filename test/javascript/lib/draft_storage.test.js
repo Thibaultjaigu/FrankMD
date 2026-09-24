@@ -58,6 +58,166 @@ describe("DraftStorage", () => {
     expect(drafts.readDraft("note.md").draft).toBeNull()
   })
 
+  it("remaps a file draft and preserves its revision metadata", () => {
+    const storage = new MemoryStorage()
+    const drafts = new DraftStorage(() => storage)
+    const original = drafts.writeDraft("notes/old.md", "local edit", "server-revision").draft
+
+    expect(drafts.remapDrafts("notes/old.md", "archive/new.md")).toEqual({ ok: true, remapped: 1 })
+    expect(drafts.readDraft("notes/old.md").draft).toBeNull()
+    expect(drafts.readDraft("archive/new.md").draft).toEqual({ ...original, path: "archive/new.md" })
+  })
+
+  it("remaps only a folder path and its descendants", () => {
+    const storage = new MemoryStorage()
+    const drafts = new DraftStorage(() => storage)
+    drafts.writeDraft("docs/index.md", "index", "rev-1")
+    drafts.writeDraft("docs/guides/setup.md", "guide", "rev-2")
+    drafts.writeDraft("docs-old/keep.md", "keep", "rev-3")
+
+    expect(drafts.remapDrafts("docs", "archive", "folder")).toEqual({ ok: true, remapped: 2 })
+    expect(drafts.readDraft("archive/index.md").draft.content).toBe("index")
+    expect(drafts.readDraft("archive/guides/setup.md").draft.content).toBe("guide")
+    expect(drafts.readDraft("docs-old/keep.md").draft.content).toBe("keep")
+    expect(drafts.readDraft("docs/index.md").draft).toBeNull()
+  })
+
+  it("preserves both source and destination drafts when a remap collides", () => {
+    const storage = new MemoryStorage()
+    const drafts = new DraftStorage(() => storage)
+    const source = drafts.writeDraft("old.md", "source version", "source-revision").draft
+    const destination = drafts.writeDraft("new.md", "destination version", "destination-revision").draft
+
+    const result = drafts.remapDrafts("old.md", "new.md")
+
+    expect(result).toMatchObject({ ok: false, collision: true, sourcePath: "old.md", destinationPath: "new.md" })
+    expect(drafts.readDraft("old.md").draft).toBeNull()
+    expect(drafts.readDraft("new.md").draft).toEqual(destination)
+    expect(drafts.listDraftConflicts("new.md").conflicts).toEqual([
+      expect.objectContaining({
+        conflictId: result.conflictId,
+        path: "new.md",
+        sourcePath: "old.md",
+        content: "source version",
+        draftRevision: source.draftRevision
+      })
+    ])
+  })
+
+  it("keeps every nested draft recoverable when a folder remap has one collision", () => {
+    const storage = new MemoryStorage()
+    const drafts = new DraftStorage(() => storage)
+    drafts.writeDraft("docs/index.md", "index draft", "index-revision")
+    const source = drafts.writeDraft("docs/guides/setup.md", "source guide", "source-revision").draft
+    const destination = drafts.writeDraft("archive/guides/setup.md", "destination guide", "destination-revision").draft
+    drafts.writeDraft("docs-old/keep.md", "unrelated", "keep-revision")
+
+    const result = drafts.remapDrafts("docs", "archive", "folder")
+
+    expect(result).toMatchObject({
+      ok: false,
+      collision: true,
+      sourcePath: "docs/guides/setup.md",
+      destinationPath: "archive/guides/setup.md"
+    })
+    expect(drafts.readDraft("docs/index.md").draft).toBeNull()
+    expect(drafts.readDraft("archive/index.md").draft).toBeNull()
+    expect(drafts.listDraftConflicts("archive/index.md").conflicts).toEqual([
+      expect.objectContaining({ sourcePath: "docs/index.md", content: "index draft" })
+    ])
+    expect(drafts.readDraft("docs/guides/setup.md").draft).toBeNull()
+    expect(drafts.readDraft("archive/guides/setup.md").draft).toEqual(destination)
+    expect(drafts.listDraftConflicts("archive/guides/setup.md").conflicts).toEqual([
+      expect.objectContaining({ sourcePath: source.path, content: source.content })
+    ])
+    expect(drafts.readDraft("docs-old/keep.md").draft.content).toBe("unrelated")
+  })
+
+  it("retains the source draft when a destination write fails", () => {
+    const storage = new MemoryStorage()
+    const drafts = new DraftStorage(() => storage)
+    const source = drafts.writeDraft("old.md", "local edit", "revision").draft
+    const originalSetItem = storage.setItem.bind(storage)
+    vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
+      if (key === drafts.draftKey("new.md")) throw new Error("quota exceeded")
+      originalSetItem(key, value)
+    })
+
+    expect(drafts.remapDrafts("old.md", "new.md")).toMatchObject({ ok: false, sourcePath: "old.md" })
+    expect(drafts.readDraft("old.md").draft).toEqual(source)
+    expect(drafts.readDraft("new.md").draft).toBeNull()
+  })
+
+  it("does not remove a source draft until the verified copy exists", () => {
+    const storage = new MemoryStorage()
+    const drafts = new DraftStorage(() => storage)
+    const source = drafts.writeDraft("old.md", "local edit", "revision").draft
+    const originalSetItem = storage.setItem.bind(storage)
+    vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
+      if (key === drafts.draftKey("new.md")) return
+      originalSetItem(key, value)
+    })
+
+    expect(drafts.remapDrafts("old.md", "new.md")).toMatchObject({ ok: false, sourcePath: "old.md" })
+    expect(drafts.readDraft("old.md").draft).toEqual(source)
+    expect(drafts.readDraft("new.md").draft).toBeNull()
+  })
+
+  it("retains both copies if removing the verified source fails", () => {
+    const storage = new MemoryStorage()
+    const drafts = new DraftStorage(() => storage)
+    const source = drafts.writeDraft("old.md", "local edit", "revision").draft
+    const originalRemoveItem = storage.removeItem.bind(storage)
+    vi.spyOn(storage, "removeItem").mockImplementation((key) => {
+      if (key === drafts.draftKey("old.md")) throw new Error("storage unavailable")
+      originalRemoveItem(key)
+    })
+
+    expect(drafts.remapDrafts("old.md", "new.md")).toMatchObject({ ok: false, sourcePath: "old.md" })
+    expect(drafts.readDraft("old.md").draft).toEqual(source)
+    expect(drafts.readDraft("new.md").draft).toEqual({ ...source, path: "new.md" })
+  })
+
+  it("removes deleted file or folder drafts and backups by path boundary", () => {
+    const storage = new MemoryStorage()
+    const drafts = new DraftStorage(() => storage)
+    drafts.writeDraft("docs/index.md", "index", "rev-1")
+    drafts.writeDraft("docs/guides/setup.md", "guide", "rev-2")
+    drafts.writeDraft("docs-old/keep.md", "keep", "rev-3")
+    drafts.writeBackup("docs/index.md", "legacy")
+    drafts.writeBackup("docs-old/keep.md", "keep legacy")
+
+    expect(drafts.removeDrafts("docs", "folder")).toEqual({ ok: true, removed: 3 })
+    expect(drafts.readDraft("docs/index.md").draft).toBeNull()
+    expect(drafts.readDraft("docs/guides/setup.md").draft).toBeNull()
+    expect(drafts.readDraft("docs-old/keep.md").draft.content).toBe("keep")
+    expect(drafts.readBackup("docs/index.md").backup).toBeNull()
+    expect(drafts.readBackup("docs-old/keep.md").backup.content).toBe("keep legacy")
+  })
+
+  it("removes recovery conflict copies when their file or folder is deleted", () => {
+    const storage = new MemoryStorage()
+    const drafts = new DraftStorage(() => storage)
+    const source = drafts.writeDraft("docs/old.md", "source", "revision").draft
+    drafts.writeDraft("docs/new.md", "destination", "other-revision")
+    drafts.remapDrafts("docs/old.md", "docs/new.md")
+
+    expect(drafts.listDraftConflicts("docs/new.md").conflicts).toHaveLength(1)
+    expect(drafts.removeDrafts("docs", "folder").ok).toBe(true)
+    expect(drafts.listDraftConflicts("docs/new.md").conflicts).toEqual([])
+    expect(drafts.readDraft("docs/old.md").draft).toBeNull()
+    expect(drafts.readDraft("docs/new.md").draft).toBeNull()
+  })
+
+  it("reports draft cleanup errors without throwing", () => {
+    const storage = new MemoryStorage()
+    const drafts = new DraftStorage(() => storage)
+    drafts.writeDraft("note.md", "local edit", "revision")
+    vi.spyOn(storage, "removeItem").mockImplementation(() => { throw new Error("storage unavailable") })
+
+    expect(drafts.removeDrafts("note.md")).toMatchObject({ ok: false, removed: 0 })
+  })
+
   it("discards malformed records without accepting unrelated local storage keys", () => {
     const storage = new MemoryStorage()
     const drafts = new DraftStorage(() => storage)

@@ -151,5 +151,33 @@ describe("RecoveryDiffController", () => {
       })
       expect(dialog.close).toHaveBeenCalled()
     })
+
+    it("includes the selected conflict identity so recovery cannot consume another draft", () => {
+      const dispatchSpy = vi.spyOn(controller, "dispatch")
+      const timestamp = Date.now()
+
+      controller.open({
+        path: "new.md",
+        serverContent: "server version",
+        backupContent: "moved draft",
+        backupTimestamp: timestamp,
+        source: "draft-conflict",
+        draftRevision: "draft-2",
+        conflictId: "conflict-1"
+      })
+
+      controller.acceptBackup()
+
+      expect(dispatchSpy).toHaveBeenCalledWith("resolved", {
+        detail: {
+          source: "draft-conflict",
+          path: "new.md",
+          content: "moved draft",
+          draftRevision: "draft-2",
+          backupTimestamp: timestamp,
+          conflictId: "conflict-1"
+        }
+      })
+    })
   })
 })

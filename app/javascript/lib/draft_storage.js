@@ -1,4 +1,5 @@
 const DRAFT_PREFIX = "frankmd:draft:"
+const DRAFT_CONFLICT_PREFIX = "frankmd:draft-conflict:"
 const BACKUP_PREFIX = "frankmd:backup:"
 
 let revisionCounter = 0
@@ -123,6 +124,437 @@ export class DraftStorage {
     }
   }
 
+  // Copy every draft attached to an item to its new path, verify each copy,
+  // then remove the old keys. localStorage has no multi-key transaction, so
+  // source records remain intact whenever copying or verification fails.
+  remapDrafts(oldPath, newPath, type = "file") {
+    if (typeof oldPath !== "string" || typeof newPath !== "string" || !oldPath || !newPath) {
+      return { ok: false, error: new TypeError("Draft remapping requires source and destination paths") }
+    }
+    if (oldPath === newPath) return { ok: true, remapped: 0 }
+
+    const listed = this.listDrafts()
+    if (!listed.ok) return listed
+
+    const candidates = listed.drafts.filter(draft => this.pathMatches(draft.path, oldPath, type))
+    const plan = candidates.map(draft => ({
+      sourcePath: draft.path,
+      destinationPath: `${newPath}${draft.path.slice(oldPath.length)}`,
+      draft
+    }))
+    const affectedPaths = plan
+      .filter(item => item.sourcePath !== item.destinationPath)
+      .map(item => item.destinationPath)
+    const fail = result => ({ ...result, affectedPaths })
+    const collisions = []
+
+    // Check all destinations before writing any of them. A stale destination
+    // draft may be the only copy of another note, so never overwrite it.
+    for (const item of plan) {
+      const sourceResult = this.readDraft(item.sourcePath)
+      if (!sourceResult.ok) return fail(sourceResult)
+      if (!sourceResult.draft || sourceResult.draft.draftRevision !== item.draft.draftRevision) {
+        return fail({ ok: false, error: new Error(`Draft changed while remapping ${item.sourcePath}`) })
+      }
+
+      const destinationResult = this.readDraft(item.destinationPath)
+      if (!destinationResult.ok) return fail(destinationResult)
+      if (destinationResult.draft && !this.sameDraftRecord(destinationResult.draft, {
+        ...item.draft,
+        path: item.destinationPath
+      })) {
+        collisions.push(item)
+        item.destinationExists = true
+        continue
+      }
+      item.destinationExists = Boolean(destinationResult.draft)
+    }
+
+    const storageResult = this.getStorage()
+    if (!storageResult.ok) return fail(storageResult)
+
+    const storage = storageResult.storage
+    let conflictPlan
+    try {
+      conflictPlan = this.keysWithPrefix(storage, DRAFT_CONFLICT_PREFIX)
+        .map(sourceKey => {
+          const raw = storage.getItem(sourceKey)
+          if (raw === null) return null
+          let conflict
+          try {
+            conflict = JSON.parse(raw)
+          } catch {
+            return null
+          }
+          if (!this.validDraftConflict(conflict) || !this.pathMatches(conflict.path, oldPath, type)) return null
+
+          const destinationPath = `${newPath}${conflict.path.slice(oldPath.length)}`
+          return {
+            sourceKey,
+            sourcePath: conflict.path,
+            destinationPath,
+            destinationKey: this.draftConflictKey(destinationPath, conflict.conflictId),
+            conflict,
+            destinationExists: false
+          }
+        })
+        .filter(Boolean)
+    } catch (error) {
+      return fail({ ok: false, error })
+    }
+    for (const item of conflictPlan) {
+      if (item.sourcePath !== item.destinationPath && !affectedPaths.includes(item.destinationPath)) {
+        affectedPaths.push(item.destinationPath)
+      }
+    }
+
+    for (const item of conflictPlan) {
+      if (item.sourcePath === item.destinationPath) continue
+      let raw
+      try {
+        raw = storage.getItem(item.destinationKey)
+      } catch (error) {
+        return fail({ ok: false, error, sourcePath: item.sourcePath, destinationPath: item.destinationPath })
+      }
+      if (raw !== null) {
+        let destination
+        try {
+          destination = JSON.parse(raw)
+        } catch {
+          return fail({ ok: false, error: new Error(`A recovery copy already exists at ${item.destinationPath}`) })
+        }
+        const expected = { ...item.conflict, path: item.destinationPath }
+        if (!this.validDraftConflict(destination) || !this.sameDraftConflict(destination, expected)) {
+          return fail({ ok: false, error: new Error(`A recovery copy already exists at ${item.destinationPath}`) })
+        }
+        item.destinationExists = true
+      }
+    }
+
+    // A folder remap may contain several drafts, and a collision in one child
+    // must not strand the remaining drafts at paths the server just removed.
+    // Preserve each source draft at its new path before removing any source.
+    if (collisions.length > 0) {
+      const preservedDrafts = []
+      for (const item of plan) {
+        const listedConflicts = this.listDraftConflicts(item.destinationPath)
+        if (!listedConflicts.ok) {
+          return fail({ ...listedConflicts, sourcePath: item.sourcePath, destinationPath: item.destinationPath })
+        }
+        let conflict = listedConflicts.conflicts.find(candidate =>
+          candidate.sourcePath === item.sourcePath &&
+          candidate.content === item.draft.content &&
+          candidate.baseRevision === item.draft.baseRevision &&
+          candidate.draftRevision === item.draft.draftRevision &&
+          candidate.updatedAt === item.draft.updatedAt
+        )
+        if (!conflict) {
+          const preserved = this.preserveDraftConflict(item.destinationPath, item.draft)
+          if (!preserved.ok) {
+            return fail({ ...preserved, sourcePath: item.sourcePath, destinationPath: item.destinationPath })
+          }
+          conflict = preserved.conflict
+        }
+        preservedDrafts.push({ item, conflict })
+      }
+
+      // Existing recovery records also follow the moved folder. The source
+      // record is retained until its destination copy has been verified.
+      for (const item of conflictPlan) {
+        if (item.sourcePath === item.destinationPath || item.destinationExists) continue
+        const destinationConflict = { ...item.conflict, path: item.destinationPath }
+        try {
+          storage.setItem(item.destinationKey, JSON.stringify(destinationConflict))
+        } catch (error) {
+          return fail({ ok: false, error, sourcePath: item.sourcePath, destinationPath: item.destinationPath })
+        }
+        let verification
+        try {
+          verification = JSON.parse(storage.getItem(item.destinationKey) || "null")
+        } catch (error) {
+          return fail({ ok: false, error, sourcePath: item.sourcePath, destinationPath: item.destinationPath })
+        }
+        if (!this.validDraftConflict(verification) || !this.sameDraftConflict(verification, destinationConflict)) {
+          return fail({
+            ok: false,
+            error: new Error(`Unable to verify the recovery copy at ${item.destinationPath}`),
+            sourcePath: item.sourcePath,
+            destinationPath: item.destinationPath
+          })
+        }
+      }
+
+      for (const { item } of preservedDrafts) {
+        const removal = this.removeDraftIfRevision(item.sourcePath, item.draft.draftRevision)
+        if (!removal.ok) return fail({ ...removal, sourcePath: item.sourcePath, destinationPath: item.destinationPath })
+        if (!removal.removed) {
+          return fail({
+            ok: false,
+            error: new Error(`The local draft at ${item.sourcePath} changed before it could be moved`),
+            sourcePath: item.sourcePath,
+            destinationPath: item.destinationPath
+          })
+        }
+      }
+      for (const item of conflictPlan) {
+        if (item.sourcePath === item.destinationPath) continue
+        const removal = this.removeDraftConflictIfRevision(item.sourcePath, item.conflict.conflictId, item.conflict.draftRevision)
+        if (!removal.ok) return fail({ ...removal, sourcePath: item.sourcePath, destinationPath: item.destinationPath })
+        if (!removal.removed) {
+          return fail({
+            ok: false,
+            error: new Error(`The recovery copy at ${item.sourcePath} changed before it could be moved`),
+            sourcePath: item.sourcePath,
+            destinationPath: item.destinationPath
+          })
+        }
+      }
+
+      const firstCollision = collisions[0]
+      const conflict = preservedDrafts.find(({ item }) => item === firstCollision)?.conflict
+      return fail({
+        ok: false,
+        collision: true,
+        sourcePath: firstCollision.sourcePath,
+        destinationPath: firstCollision.destinationPath,
+        conflictId: conflict?.conflictId,
+        collisions: collisions.map(item => ({ sourcePath: item.sourcePath, destinationPath: item.destinationPath })),
+        error: new Error(`A local draft already exists at ${firstCollision.destinationPath}`)
+      })
+    }
+
+    for (const item of plan) {
+      if (item.sourcePath === item.destinationPath || item.destinationExists) continue
+
+      const destinationDraft = { ...item.draft, path: item.destinationPath }
+      try {
+        storage.setItem(this.draftKey(item.destinationPath), JSON.stringify(destinationDraft))
+      } catch (error) {
+        return fail({ ok: false, error, sourcePath: item.sourcePath, destinationPath: item.destinationPath })
+      }
+
+      const verification = this.readDraft(item.destinationPath)
+      if (!verification.ok) return fail({ ...verification, sourcePath: item.sourcePath, destinationPath: item.destinationPath })
+      if (!verification.draft || !this.sameDraftRecord(verification.draft, destinationDraft)) {
+        return fail({
+          ok: false,
+          error: new Error(`Unable to verify the local draft at ${item.destinationPath}`),
+          sourcePath: item.sourcePath,
+          destinationPath: item.destinationPath
+        })
+      }
+    }
+
+    for (const item of conflictPlan) {
+      if (item.sourcePath === item.destinationPath || item.destinationExists) continue
+      const destinationConflict = { ...item.conflict, path: item.destinationPath }
+      try {
+        storage.setItem(item.destinationKey, JSON.stringify(destinationConflict))
+      } catch (error) {
+        return fail({ ok: false, error, sourcePath: item.sourcePath, destinationPath: item.destinationPath })
+      }
+      let verification
+      try {
+        verification = JSON.parse(storage.getItem(item.destinationKey) || "null")
+      } catch (error) {
+        return fail({ ok: false, error, sourcePath: item.sourcePath, destinationPath: item.destinationPath })
+      }
+      if (!this.validDraftConflict(verification) || !this.sameDraftConflict(verification, destinationConflict)) {
+        return fail({
+          ok: false,
+          error: new Error(`Unable to verify the recovery copy at ${item.destinationPath}`),
+          sourcePath: item.sourcePath,
+          destinationPath: item.destinationPath
+        })
+      }
+    }
+
+    // Only remove sources after every destination has been confirmed. A failed
+    // removal leaves two valid copies, which is safer than losing the draft.
+    for (const item of plan) {
+      if (item.sourcePath === item.destinationPath) continue
+      const removal = this.removeDraftIfRevision(item.sourcePath, item.draft.draftRevision)
+      if (!removal.ok) return fail({ ...removal, sourcePath: item.sourcePath, destinationPath: item.destinationPath })
+      if (!removal.removed) {
+        return fail({
+          ok: false,
+          error: new Error(`The local draft at ${item.sourcePath} changed before it could be moved`),
+          sourcePath: item.sourcePath,
+          destinationPath: item.destinationPath
+        })
+      }
+    }
+
+    for (const item of conflictPlan) {
+      if (item.sourcePath === item.destinationPath) continue
+      const removal = this.removeDraftConflictIfRevision(item.sourcePath, item.conflict.conflictId, item.conflict.draftRevision)
+      if (!removal.ok) return fail({ ...removal, sourcePath: item.sourcePath, destinationPath: item.destinationPath })
+      if (!removal.removed) {
+        return fail({
+          ok: false,
+          error: new Error(`The recovery copy at ${item.sourcePath} changed before it could be moved`),
+          sourcePath: item.sourcePath,
+          destinationPath: item.destinationPath
+        })
+      }
+    }
+
+    return {
+      ok: true,
+      remapped: plan.filter(item => item.sourcePath !== item.destinationPath).length +
+        conflictPlan.filter(item => item.sourcePath !== item.destinationPath).length
+    }
+  }
+
+  // Remove a file's drafts, or drafts for a folder and its descendants. Also
+  // remove legacy backups so deleted notes cannot be offered for recovery.
+  removeDrafts(path, type = "file") {
+    if (typeof path !== "string" || !path) {
+      return { ok: false, error: new TypeError("Draft cleanup requires a path") }
+    }
+
+    const storageResult = this.getStorage()
+    if (!storageResult.ok) return storageResult
+    const storage = storageResult.storage
+    let keys
+    let backupKeys
+    let conflictKeys
+    try {
+      keys = this.keysWithPrefix(storage, DRAFT_PREFIX)
+      backupKeys = this.keysWithPrefix(storage, BACKUP_PREFIX)
+      conflictKeys = this.keysWithPrefix(storage, DRAFT_CONFLICT_PREFIX)
+    } catch (error) {
+      return { ok: false, error, removed: 0 }
+    }
+    let firstError = null
+    let removed = 0
+
+    for (const key of keys) {
+      const rawPath = key.slice(DRAFT_PREFIX.length)
+      let keyPath
+      try {
+        keyPath = decodeURIComponent(rawPath)
+      } catch {
+        continue
+      }
+      if (!this.pathMatches(keyPath, path, type)) continue
+      try {
+        storage.removeItem(key)
+        removed += 1
+      } catch (error) {
+        firstError ||= error
+      }
+    }
+
+    for (const key of backupKeys) {
+      const backupPath = key.slice(BACKUP_PREFIX.length)
+      if (!this.pathMatches(backupPath, path, type)) continue
+      try {
+        storage.removeItem(key)
+        removed += 1
+      } catch (error) {
+        firstError ||= error
+      }
+    }
+
+    for (const key of conflictKeys) {
+      let conflict
+      try {
+        conflict = JSON.parse(storage.getItem(key) || "null")
+      } catch (error) {
+        firstError ||= error
+        continue
+      }
+      if (!this.validDraftConflict(conflict) || !this.pathMatches(conflict.path, path, type)) continue
+      try {
+        storage.removeItem(key)
+        removed += 1
+      } catch (error) {
+        firstError ||= error
+      }
+    }
+
+    return firstError ? { ok: false, error: firstError, removed } : { ok: true, removed }
+  }
+
+  listDraftConflicts(path) {
+    try {
+      const storage = this.storageProvider()
+      const prefix = this.draftConflictPathPrefix(path)
+      const conflicts = []
+      for (const key of this.keysWithPrefix(storage, prefix)) {
+        const raw = storage.getItem(key)
+        if (raw === null) continue
+        let conflict
+        try {
+          conflict = JSON.parse(raw)
+        } catch {
+          continue
+        }
+        if (this.validDraftConflict(conflict) && conflict.path === path && key === this.draftConflictKey(path, conflict.conflictId)) {
+          conflicts.push(conflict)
+        }
+      }
+      conflicts.sort((a, b) => a.updatedAt - b.updatedAt)
+      return { ok: true, conflicts }
+    } catch (error) {
+      return { ok: false, error }
+    }
+  }
+
+  preserveDraftConflict(path, draft) {
+    if (!validDraft(draft, draft?.path) || typeof path !== "string" || !path) {
+      return { ok: false, error: new TypeError("A draft conflict requires a valid draft and destination path") }
+    }
+
+    const conflictId = nextDraftRevision()
+    const conflict = {
+      schemaVersion: 1,
+      path,
+      sourcePath: draft.path,
+      conflictId,
+      content: draft.content,
+      baseRevision: draft.baseRevision,
+      draftRevision: draft.draftRevision,
+      updatedAt: draft.updatedAt
+    }
+
+    try {
+      const storage = this.storageProvider()
+      const key = this.draftConflictKey(path, conflictId)
+      storage.setItem(key, JSON.stringify(conflict))
+      const saved = JSON.parse(storage.getItem(key) || "null")
+      if (!this.validDraftConflict(saved) || saved.conflictId !== conflictId) {
+        return { ok: false, error: new Error(`Unable to verify the recovery copy for ${path}`) }
+      }
+      return { ok: true, conflictId, conflict }
+    } catch (error) {
+      return { ok: false, error }
+    }
+  }
+
+  removeDraftConflictIfRevision(path, conflictId, draftRevision) {
+    try {
+      const storage = this.storageProvider()
+      const key = this.draftConflictKey(path, conflictId)
+      const raw = storage.getItem(key)
+      if (raw === null) return { ok: true, removed: false }
+      let conflict
+      try {
+        conflict = JSON.parse(raw)
+      } catch {
+        return { ok: true, removed: false }
+      }
+      if (!this.validDraftConflict(conflict) || conflict.draftRevision !== draftRevision) {
+        return { ok: true, removed: false }
+      }
+      storage.removeItem(key)
+      return { ok: true, removed: true }
+    } catch (error) {
+      return { ok: false, error }
+    }
+  }
+
   listDrafts() {
     try {
       const storage = this.storageProvider()
@@ -155,6 +587,7 @@ export class DraftStorage {
     try {
       const storage = this.storageProvider()
       for (const key of this.keysWithPrefix(storage, DRAFT_PREFIX)) storage.removeItem(key)
+      for (const key of this.keysWithPrefix(storage, DRAFT_CONFLICT_PREFIX)) storage.removeItem(key)
       return { ok: true }
     } catch (error) {
       return { ok: false, error }
@@ -243,6 +676,14 @@ export class DraftStorage {
     return DRAFT_PREFIX + encodeURIComponent(path)
   }
 
+  draftConflictKey(path, conflictId) {
+    return `${this.draftConflictPathPrefix(path)}${conflictId}`
+  }
+
+  draftConflictPathPrefix(path) {
+    return `${DRAFT_CONFLICT_PREFIX}${encodeURIComponent(path)}:`
+  }
+
   backupKey(path) {
     // Keep the historic key format so backups written by older FrankMD
     // versions remain recoverable.
@@ -256,6 +697,50 @@ export class DraftStorage {
       if (key?.startsWith(prefix)) keys.push(key)
     }
     return keys
+  }
+
+  pathMatches(path, targetPath, type) {
+    return type === "folder"
+      ? path === targetPath || path.startsWith(`${targetPath}/`)
+      : path === targetPath
+  }
+
+  sameDraftRecord(left, right) {
+    return left.path === right.path &&
+      left.content === right.content &&
+      left.baseRevision === right.baseRevision &&
+      left.draftRevision === right.draftRevision &&
+      left.updatedAt === right.updatedAt
+  }
+
+  sameDraftConflict(left, right) {
+    return left.path === right.path &&
+      left.sourcePath === right.sourcePath &&
+      left.conflictId === right.conflictId &&
+      left.content === right.content &&
+      left.baseRevision === right.baseRevision &&
+      left.draftRevision === right.draftRevision &&
+      left.updatedAt === right.updatedAt
+  }
+
+  validDraftConflict(value) {
+    return value &&
+      value.schemaVersion === 1 &&
+      typeof value.path === "string" &&
+      typeof value.sourcePath === "string" &&
+      typeof value.conflictId === "string" &&
+      typeof value.content === "string" &&
+      typeof value.baseRevision === "string" &&
+      typeof value.draftRevision === "string" &&
+      Number.isFinite(value.updatedAt)
+  }
+
+  getStorage() {
+    try {
+      return { ok: true, storage: this.storageProvider() }
+    } catch (error) {
+      return { ok: false, error }
+    }
   }
 
   discardMalformedDraft(path) {
