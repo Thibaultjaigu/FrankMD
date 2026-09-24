@@ -1251,6 +1251,138 @@ describe("AutosaveController — Content Loss Detection", () => {
       expect(global.fetch.mock.calls[0][0]).toContain("/notes/bar.md")
     })
 
+    it("makes a remap failure recoverable and blocks writes until the user resolves it", () => {
+      const error = new Error("draft remap failed")
+      vi.spyOn(draftStorage, "remapDrafts").mockReturnValue({
+        ok: false,
+        error,
+        sourcePath: "foo.md",
+        destinationPath: "bar.md",
+        affectedPaths: ["bar.md"]
+      })
+      vi.spyOn(console, "error").mockImplementation(() => {})
+      controller.setFile("foo.md", "saved content", "revision-foo")
+      mockCodemirrorValue = "recoverable local draft"
+
+      expect(controller.renameFile("foo.md", "bar.md", "file")).toBe(true)
+
+      const conflict = draftStorage.listDraftConflicts("bar.md").conflicts[0]
+      expect(controller.currentFile).toBe("bar.md")
+      expect(conflict).toMatchObject({
+        sourcePath: "foo.md",
+        content: "recoverable local draft",
+        baseRevision: "revision-foo"
+      })
+      expect(draftStorage.readDraft("foo.md").draft.content).toBe("recoverable local draft")
+      expect(controller._draftBlockedPaths.has("bar.md")).toBe(true)
+      expect(controller.hasPendingRecovery("bar.md")).toBe(true)
+
+      controller.scheduleAutoSave()
+      const blockedWrite = controller.writeDraftSnapshot({
+        path: "bar.md",
+        content: "later edit",
+        baseRevision: "revision-foo"
+      })
+
+      expect(blockedWrite.ok).toBe(false)
+      expect(controller.saveTimeout).toBeNull()
+      expect(global.fetch).not.toHaveBeenCalled()
+      expect(draftStorage.listDraftConflicts("bar.md").conflicts).toContainEqual(expect.objectContaining({
+        conflictId: conflict.conflictId,
+        content: "recoverable local draft"
+      }))
+
+      const recoveryElement = container.querySelector('[data-controller~="recovery-diff"]')
+      const recoveryController = application.getControllerForElementAndIdentifier(recoveryElement, "recovery-diff")
+      recoveryController.acceptBackup()
+
+      expect(draftStorage.readDraft("bar.md").draft.content).toBe("recoverable local draft")
+      expect(draftStorage.readDraft("foo.md").draft).toBeNull()
+      expect(draftStorage.listDraftConflicts("bar.md").conflicts).toEqual([])
+      expect(controller._draftBlockedPaths.has("bar.md")).toBe(false)
+      expect(controller.hasPendingRecovery("bar.md")).toBe(false)
+      expect(controller.saveTimeout).not.toBeNull()
+    })
+
+    it("retains the source draft and retries recovery when fallback storage also fails", () => {
+      const remapError = new Error("draft remap failed")
+      const preserveError = new Error("recovery storage unavailable")
+      vi.spyOn(draftStorage, "remapDrafts").mockReturnValue({
+        ok: false,
+        error: remapError,
+        sourcePath: "foo.md",
+        destinationPath: "bar.md",
+        affectedPaths: ["bar.md"]
+      })
+      vi.spyOn(draftStorage, "preserveDraftConflict").mockReturnValueOnce({ ok: false, error: preserveError })
+      vi.spyOn(console, "error").mockImplementation(() => {})
+      controller.setFile("foo.md", "saved content", "revision-foo")
+      mockCodemirrorValue = "recoverable local draft"
+
+      controller.renameFile("foo.md", "bar.md", "file")
+
+      expect(draftStorage.readDraft("foo.md").draft.content).toBe("recoverable local draft")
+      expect(draftStorage.listDraftConflicts("bar.md").conflicts).toEqual([])
+      expect(controller._pendingRemapRecoveries.get("bar.md")).toBe("foo.md")
+      expect(controller._draftBlockedPaths.has("bar.md")).toBe(true)
+
+      controller.scheduleAutoSave()
+      expect(controller.saveTimeout).toBeNull()
+      expect(global.fetch).not.toHaveBeenCalled()
+
+      expect(controller.recoverDraft("server content", "revision-foo")).toBe("server content")
+
+      expect(controller._pendingRemapRecoveries.has("bar.md")).toBe(false)
+      expect(draftStorage.listDraftConflicts("bar.md").conflicts).toContainEqual(expect.objectContaining({
+        sourcePath: "foo.md",
+        content: "recoverable local draft"
+      }))
+      expect(controller.hasPendingRecovery("bar.md")).toBe(true)
+    })
+
+    it("does not let a late save response remove the source draft after remap failure", async () => {
+      let resolveFetch
+      global.fetch = vi.fn().mockImplementation(() => new Promise(resolve => {
+        resolveFetch = resolve
+      }))
+      vi.spyOn(draftStorage, "remapDrafts").mockReturnValue({
+        ok: false,
+        error: new Error("draft remap failed"),
+        sourcePath: "foo.md",
+        destinationPath: "bar.md",
+        affectedPaths: ["bar.md"]
+      })
+      vi.spyOn(draftStorage, "preserveDraftConflict").mockReturnValueOnce({
+        ok: false,
+        error: new Error("recovery storage unavailable")
+      })
+      vi.spyOn(console, "error").mockImplementation(() => {})
+      controller.setFile("foo.md", "saved content", "revision-foo")
+      mockCodemirrorValue = "recoverable local draft"
+      controller.scheduleAutoSave()
+      const savePromise = controller.saveNow()
+
+      controller.renameFile("foo.md", "bar.md", "file")
+      resolveFetch({ ok: true, json: () => Promise.resolve({ revision: "new-server-revision" }) })
+      await savePromise
+
+      expect(draftStorage.readDraft("foo.md").draft).toMatchObject({
+        content: "recoverable local draft",
+        baseRevision: "revision-foo"
+      })
+      expect(draftStorage.listDraftConflicts("bar.md").conflicts).toEqual([])
+      expect(controller._pendingRemapRecoveries.get("bar.md")).toBe("foo.md")
+      expect(controller.saveTimeout).toBeNull()
+
+      controller.recoverDraft("saved content", "revision-foo")
+
+      expect(draftStorage.listDraftConflicts("bar.md").conflicts).toContainEqual(expect.objectContaining({
+        sourcePath: "foo.md",
+        content: "recoverable local draft"
+      }))
+      expect(controller.hasPendingRecovery("bar.md")).toBe(true)
+    })
+
     it("does not overwrite a destination draft collision and blocks local writes there", () => {
       controller.setFile("foo.md", "saved content", "revision-source")
       controller.flushDraftWrite("foo.md", "source edit", "revision-source")

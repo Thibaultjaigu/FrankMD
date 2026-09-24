@@ -32,6 +32,7 @@ export default class extends Controller {
     }
     this._draftPersistenceFailures = new Set()
     this._draftBlockedPaths = new Set()
+    this._pendingRemapRecoveries = new Map()
     this._draftStorageErrorVisible = false
     this._offlineBackupTimeout = null
     this._draftWriteTimeouts = new Map()
@@ -180,6 +181,9 @@ export default class extends Controller {
     const remapResult = activeDraftFlush.ok
       ? draftStorage.remapDrafts(oldPath, newPath, type)
       : activeDraftFlush
+    const remapRecovery = !remapResult.ok && !remapResult.collision
+      ? this.preserveFailedDraftRemap(oldPath, newPath, type, remapResult, activeDraftFlush.draft)
+      : null
     if (!remapResult.ok) {
       const affectedPaths = remapResult.affectedPaths?.length
         ? remapResult.affectedPaths
@@ -229,8 +233,123 @@ export default class extends Controller {
           conflictId: conflict.conflictId
         })
       }
+    } else if (remapRecovery?.recoveries) {
+      const recovery = remapRecovery.recoveries.find(item => item.destinationPath === remappedPath)
+      if (recovery) {
+        this.openRecovery({
+          path: remappedPath,
+          serverContent: this._lastSavedContent ?? "",
+          content: recovery.conflict.content,
+          timestamp: recovery.conflict.updatedAt,
+          source: "draft-conflict",
+          draftRevision: recovery.conflict.draftRevision,
+          conflictId: recovery.conflict.conflictId
+        })
+      }
     }
     return true
+  }
+
+  // A server rename has already succeeded by the time this method runs. If
+  // the storage remap failed, copy every still-present source draft into a
+  // verified recovery record at its new path before leaving it blocked. Keep
+  // the source record until the user resolves that recovery copy.
+  preserveFailedDraftRemap(oldPath, newPath, type, remapResult, activeDraft = null) {
+    const listed = draftStorage.listDrafts()
+    const candidates = new Map()
+    const failedSources = new Map()
+    const addCandidate = draft => {
+      if (draft && this.pathMatches(draft.path, oldPath, type)) candidates.set(draft.path, draft)
+    }
+
+    if (listed.ok) {
+      for (const draft of listed.drafts) addCandidate(draft)
+    }
+    addCandidate(activeDraft)
+
+    const sourcePaths = new Set()
+    if (this.pathMatches(this.currentFile, oldPath, type)) sourcePaths.add(this.currentFile)
+    if (typeof remapResult.sourcePath === "string") sourcePaths.add(remapResult.sourcePath)
+    for (const destinationPath of remapResult.affectedPaths ?? []) {
+      const sourcePath = this.reverseRemapPath(destinationPath, oldPath, newPath, type)
+      if (sourcePath) sourcePaths.add(sourcePath)
+    }
+
+    for (const sourcePath of sourcePaths) {
+      if (candidates.has(sourcePath)) continue
+      const source = draftStorage.readDraft(sourcePath)
+      if (!source.ok) {
+        const destinationPath = this.remapPath(sourcePath, oldPath, newPath, type) ||
+          (sourcePath === remapResult.sourcePath ? remapResult.destinationPath : null)
+        if (destinationPath) failedSources.set(destinationPath, sourcePath)
+      } else if (source.draft) {
+        addCandidate(source.draft)
+      }
+    }
+
+    const recoveries = []
+    for (const draft of candidates.values()) {
+      const destinationPath = this.remapPath(draft.path, oldPath, newPath, type)
+      if (!destinationPath || destinationPath === draft.path) continue
+
+      const listedConflicts = draftStorage.listDraftConflicts(destinationPath)
+      if (!listedConflicts.ok) {
+        failedSources.set(destinationPath, draft.path)
+        continue
+      }
+
+      let conflict = listedConflicts.conflicts.find(item =>
+        item.sourcePath === draft.path &&
+        item.content === draft.content &&
+        item.baseRevision === draft.baseRevision &&
+        item.draftRevision === draft.draftRevision &&
+        item.updatedAt === draft.updatedAt
+      )
+      if (!conflict) {
+        const preserved = draftStorage.preserveDraftConflict(destinationPath, draft)
+        if (!preserved.ok) {
+          failedSources.set(destinationPath, draft.path)
+          continue
+        }
+        conflict = preserved.conflict
+      }
+
+      this._pendingRemapRecoveries.delete(destinationPath)
+      recoveries.push({ destinationPath, conflict })
+    }
+
+    for (const [destinationPath, sourcePath] of failedSources) {
+      this._pendingRemapRecoveries.set(destinationPath, sourcePath)
+    }
+
+    return { recoveries }
+  }
+
+  reverseRemapPath(path, oldPath, newPath, type = "file") {
+    if (type === "folder") {
+      if (path === newPath || path.startsWith(`${newPath}/`)) {
+        return `${oldPath}${path.slice(newPath.length)}`
+      }
+      return null
+    }
+    return path === newPath ? oldPath : null
+  }
+
+  retryPendingRemapRecovery(path) {
+    const sourcePath = this._pendingRemapRecoveries.get(path)
+    if (!sourcePath) return { ok: true, conflict: null }
+
+    const source = draftStorage.readDraft(sourcePath)
+    if (!source.ok) return source
+    if (!source.draft) {
+      this._pendingRemapRecoveries.delete(path)
+      return { ok: true, conflict: null }
+    }
+
+    const preserved = draftStorage.preserveDraftConflict(path, source.draft)
+    if (!preserved.ok) return preserved
+    this._pendingRemapRecoveries.delete(path)
+    return { ok: true, conflict: preserved.conflict }
   }
 
   // Invalidate all autosave state for a deleted note. A save already in flight
@@ -305,7 +424,7 @@ export default class extends Controller {
   scheduleDraftWrite() {
     const path = this.currentFile
     const baseRevision = this._baseRevision
-    if (!path || !baseRevision || this.hasPendingRecovery(path)) return
+    if (!path || !baseRevision || this.hasPendingRecovery(path) || this._draftBlockedPaths.has(path)) return
 
     const cm = this.getCodemirrorController()
     const content = cm ? cm.getValue() : ""
@@ -501,6 +620,12 @@ export default class extends Controller {
     const path = this.currentFile
     if (!path) return serverContent
 
+    const pendingRemap = this.retryPendingRemapRecovery(path)
+    if (!pendingRemap.ok) {
+      this.showDraftStorageError(pendingRemap.error)
+      return serverContent
+    }
+
     const conflictsResult = draftStorage.listDraftConflicts(path)
     if (!conflictsResult.ok) {
       this.showDraftStorageError(conflictsResult.error)
@@ -632,7 +757,7 @@ export default class extends Controller {
   // === Auto Save ===
 
   scheduleAutoSave() {
-    if (this.hasPendingRecovery()) return
+    if (this.hasPendingRecovery() || this._draftBlockedPaths.has(this.currentFile)) return
 
     this.scheduleDraftWrite()
 
@@ -695,7 +820,7 @@ export default class extends Controller {
   }
 
   async saveNow(snapshot = null) {
-    if (this.hasPendingRecovery()) return
+    if (this.hasPendingRecovery() || this._draftBlockedPaths.has(this.currentFile)) return
     if (this.isOffline) {
       this.hasUnsavedChanges = true
       return
@@ -745,6 +870,13 @@ export default class extends Controller {
       const newRevision = typeof responseData?.revision === "string" ? responseData.revision : null
       if (newRevision) this._knownBaseRevisions.set(filePath, newRevision)
 
+      // A rename, delete, or file load may have happened while the request was
+      // in flight. Do not let a stale response remove the only source draft.
+      if (this.currentFile !== filePath || this._fileVersion !== fileVersion) {
+        if (this.currentFile && this.hasUnsavedChanges) this.scheduleAutoSave()
+        return
+      }
+
       // Remove only the snapshot captured for this request. A newer edit may
       // already have replaced it while the request was in flight.
       if (savedDraftRevision) this.removeDraftIfRevision(filePath, savedDraftRevision)
@@ -770,13 +902,6 @@ export default class extends Controller {
       }
 
       rebaseNewerDraft()
-
-      // A rename, delete, or file load may have happened while the request was
-      // in flight. Do not let the old response change state for the new file.
-      if (this.currentFile !== filePath || this._fileVersion !== fileVersion) {
-        if (this.currentFile && this.hasUnsavedChanges) this.scheduleAutoSave()
-        return
-      }
 
       this._lastSavedContent = content
       if (newRevision) {
@@ -1030,6 +1155,7 @@ export default class extends Controller {
       if (typeof serverContent === "string" && codemirrorController) codemirrorController.setValue(serverContent)
       this.hasUnsavedChanges = false
       this._draftRevision = null
+      if (this.hasPendingRecovery(path)) this._pendingRecovery = null
       this._draftBlockedPaths.delete(path)
       this._draftPersistenceFailures.delete(path)
       this.clearDraftStorageError()
@@ -1065,18 +1191,18 @@ export default class extends Controller {
     const codemirrorController = this.getCodemirrorController()
     if (codemirrorController) codemirrorController.setValue(content)
 
+    if (this.hasPendingRecovery(path)) this._pendingRecovery = null
+    this._draftBlockedPaths.delete(path)
+    this._draftPersistenceFailures.delete(path)
+    this.clearDraftStorageError()
+    this.updateBeforeUnloadListener()
+
     if (this.isLargeDeletion(this._lastSavedContent, content)) {
       this.showContentLossWarning()
       this.clearPendingTimers()
     } else if (this.hasUnsavedChanges) {
       this.scheduleAutoSave()
     }
-    // All alternatives now live under independent conflict keys, so future
-    // edits can safely use the primary key without overwriting a recovery copy.
-    this._draftBlockedPaths.delete(path)
-    this._draftPersistenceFailures.delete(path)
-    this.clearDraftStorageError()
-    this.updateBeforeUnloadListener()
   }
 
   // === UI ===
