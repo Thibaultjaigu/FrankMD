@@ -32,6 +32,7 @@ export default class extends Controller {
     this._draftRevision = null
     this._saveScheduleGeneration = 0
     this._scheduledSaveSnapshot = null
+    this._pendingRecovery = null
   }
 
   disconnect() {
@@ -47,6 +48,10 @@ export default class extends Controller {
   getCodemirrorController() { return this.codemirrorOutlets[0] ?? null }
   getOfflineBackupController() { return this.offlineBackupOutlets[0] ?? null }
   getRecoveryDiffController() { return this.recoveryDiffOutlets[0] ?? null }
+
+  hasPendingRecovery(path = this.currentFile) {
+    return this._pendingRecovery?.path === path
+  }
 
   // === Public API (called by app controller) ===
 
@@ -176,7 +181,7 @@ export default class extends Controller {
   scheduleDraftWrite() {
     const path = this.currentFile
     const baseRevision = this._baseRevision
-    if (!path || !baseRevision) return
+    if (!path || !baseRevision || this.hasPendingRecovery(path)) return
 
     const cm = this.getCodemirrorController()
     const content = cm ? cm.getValue() : ""
@@ -198,7 +203,7 @@ export default class extends Controller {
   }
 
   flushDraftWrite(path = this.currentFile, content = null, baseRevision = this._baseRevision) {
-    if (!path || !baseRevision) return { ok: true, draft: null }
+    if (!path || !baseRevision || this.hasPendingRecovery(path)) return { ok: true, draft: null }
 
     const cm = this.getCodemirrorController()
     const snapshotContent = content === null ? (cm ? cm.getValue() : "") : content
@@ -218,6 +223,8 @@ export default class extends Controller {
   }
 
   writeDraftSnapshot(snapshot) {
+    if (this.hasPendingRecovery(snapshot.path)) return { ok: true, draft: null, blocked: true }
+
     const latestBaseRevision = this._knownBaseRevisions.get(snapshot.path)
     const baseRevision = latestBaseRevision || snapshot.baseRevision
     const result = draftStorage.writeDraft(snapshot.path, snapshot.content, baseRevision)
@@ -275,6 +282,11 @@ export default class extends Controller {
     const recovery = this.getRecoveryDiffController()
     if (!recovery) return false
 
+    if (path === this.currentFile) {
+      this.clearDraftWriteTimeout(path)
+      this.clearPendingTimers()
+    }
+
     recovery.open({
       path,
       serverContent,
@@ -283,6 +295,7 @@ export default class extends Controller {
       source,
       draftRevision
     })
+    this._pendingRecovery = { path, draftRevision }
     return true
   }
 
@@ -356,11 +369,12 @@ export default class extends Controller {
     if (!data) return
     const recovery = this.getRecoveryDiffController()
     if (recovery) {
-      recovery.open({
+      this.openRecovery({
         path: this.currentFile,
         serverContent,
-        backupContent: data.content,
-        backupTimestamp: data.timestamp
+        content: data.content,
+        timestamp: data.timestamp,
+        source: "backup"
       })
     }
   }
@@ -395,6 +409,8 @@ export default class extends Controller {
   // === Auto Save ===
 
   scheduleAutoSave() {
+    if (this.hasPendingRecovery()) return
+
     this.scheduleDraftWrite()
 
     if (this.isOffline) {
@@ -456,6 +472,7 @@ export default class extends Controller {
   }
 
   async saveNow(snapshot = null) {
+    if (this.hasPendingRecovery()) return
     if (this.isOffline) {
       this.hasUnsavedChanges = true
       return
@@ -682,12 +699,14 @@ export default class extends Controller {
       }
       removeSelectedBackup()
       if (draftRevision === this._draftRevision) this._draftRevision = null
+      if (this.hasPendingRecovery(path)) this._pendingRecovery = null
       this.hasUnsavedChanges = false
       this.showSaveStatus("")
       return
     }
 
     if ((source === "backup" || source === "draft") && typeof content === "string") {
+      if (this.hasPendingRecovery(path)) this._pendingRecovery = null
       const cm = this.getCodemirrorController()
       if (cm) cm.setValue(content)
       this.clearDraftWriteTimeout(path)
