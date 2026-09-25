@@ -624,6 +624,15 @@ class ConfigTest < ActiveSupport::TestCase
     assert_equal "openai/gpt-4o-mini", config.effective_ai_model
   end
 
+  test "requesty key alone does not make requesty available" do
+    @test_dir.join(".fed").write("requesty_api_key = rqsty-file-key")
+    config = Config.new(base_path: @test_dir)
+
+    assert_equal [], config.ai_providers_available
+    assert_not config.feature_available?("ai")
+    assert_nil config.effective_ai_provider
+  end
+
   test "effective_ai_provider ignores unavailable provider" do
     ENV["OLLAMA_API_BASE"] = "http://localhost:11434"
 

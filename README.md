@@ -489,7 +489,7 @@ FrankMD has an AI grammar and spelling checker. Click the "AI" button in the edi
 4. **OpenRouter** - Multiple providers, pay-per-use
 5. **Ollama** - Local, free, private
 
-**Requesty** (LLM gateway) is also supported. It is never picked in auto mode, so set `ai_provider = requesty` to use it.
+**Requesty** (LLM gateway) is also supported. It is only used when `ai_provider = requesty` is set; a Requesty key on its own does not enable AI.
 
 When multiple providers are configured, FrankMD uses the first available one in the priority order above. You can override this with `ai_provider = <provider>`.
 

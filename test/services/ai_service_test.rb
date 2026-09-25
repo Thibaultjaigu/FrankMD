@@ -46,9 +46,17 @@ class AiServiceTest < ActiveSupport::TestCase
     assert AiService.enabled?
   end
 
-  test "enabled? returns true when Requesty key is set" do
+  test "enabled? returns false when only Requesty key is set" do
     ENV["REQUESTY_API_KEY"] = "rqsty-test-key"
+    assert_not AiService.enabled?
+    assert_nil AiService.current_provider
+  end
+
+  test "enabled? returns true when Requesty key is set and selected" do
+    ENV["REQUESTY_API_KEY"] = "rqsty-test-key"
+    ENV["AI_PROVIDER"] = "requesty"
     assert AiService.enabled?
+    assert_equal "requesty", AiService.current_provider
   end
 
   test "enabled? returns true when Anthropic key is set" do

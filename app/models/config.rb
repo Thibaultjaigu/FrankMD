@@ -411,7 +411,8 @@ class Config
     available = []
     available << "ollama" if get_ai("ollama_api_base").present?
     available << "openrouter" if get_ai("openrouter_api_key").present?
-    available << "requesty" if get_ai("requesty_api_key").present?
+    # Requesty is opt-in only: it needs ai_provider = requesty as well as a key
+    available << "requesty" if get_ai("ai_provider") == "requesty" && get_ai("requesty_api_key").present?
     available << "anthropic" if get_ai("anthropic_api_key").present?
     available << "gemini" if get_ai("gemini_api_key").present?
     available << "openai" if get_ai("openai_api_key").present?
