@@ -399,6 +399,8 @@ pt-PT:
       ollama_description: "Execute IA localmente na sua máquina:"
       openrouter_title: "OpenRouter"
       openrouter_description: "Aceda a múltiplos fornecedores de IA:"
+      requesty_title: "Requesty"
+      requesty_description: "Aceda a vários modelos com uma única API:"
       anthropic_title: "Anthropic (Claude)"
       anthropic_description: "Use modelos Claude:"
       gemini_title: "Google Gemini"

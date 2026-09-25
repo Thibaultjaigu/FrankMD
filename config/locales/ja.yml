@@ -399,6 +399,8 @@ ja:
       ollama_description: "ローカルでAIを実行："
       openrouter_title: "OpenRouter"
       openrouter_description: "複数のAIプロバイダーにアクセス："
+      requesty_title: "Requesty"
+      requesty_description: "1つのAPIで多数のモデルにアクセス："
       anthropic_title: "Anthropic (Claude)"
       anthropic_description: "Claudeモデルを使用："
       gemini_title: "Google Gemini"

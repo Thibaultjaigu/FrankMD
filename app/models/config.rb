@@ -54,6 +54,8 @@ class Config
     "ollama_model" => { default: "llama3.2:latest", type: :string, env: "OLLAMA_MODEL" },
     "openrouter_api_key" => { default: nil, type: :string, env: "OPENROUTER_API_KEY" },
     "openrouter_model" => { default: "openai/gpt-4o-mini", type: :string, env: "OPENROUTER_MODEL" },
+    "requesty_api_key" => { default: nil, type: :string, env: "REQUESTY_API_KEY" },
+    "requesty_model" => { default: "openai/gpt-4o-mini", type: :string, env: "REQUESTY_MODEL" },
     "anthropic_api_key" => { default: nil, type: :string, env: "ANTHROPIC_API_KEY" },
     "anthropic_model" => { default: "claude-sonnet-4-20250514", type: :string, env: "ANTHROPIC_MODEL" },
     "gemini_api_key" => { default: nil, type: :string, env: "GEMINI_API_KEY" },
@@ -81,6 +83,7 @@ class Config
     google_api_key
     openai_api_key
     openrouter_api_key
+    requesty_api_key
     anthropic_api_key
     gemini_api_key
   ].freeze
@@ -113,6 +116,7 @@ class Config
   AI_CREDENTIAL_KEYS = %w[
     ollama_api_base
     openrouter_api_key
+    requesty_api_key
     anthropic_api_key
     gemini_api_key
     openai_api_key
@@ -255,6 +259,10 @@ class Config
         "# OpenRouter (multiple providers, pay-per-use)",
         "# openrouter_api_key = sk-or-...",
         "# openrouter_model = openai/gpt-4o-mini",
+        "",
+        "# Requesty (LLM gateway, set ai_provider = requesty to use it)",
+        "# requesty_api_key = rqsty-...",
+        "# requesty_model = openai/gpt-4o-mini",
         "",
         "# Ollama (local, free) - for privacy, requires local setup",
         "# ollama_api_base = http://localhost:11434",
@@ -403,6 +411,7 @@ class Config
     available = []
     available << "ollama" if get_ai("ollama_api_base").present?
     available << "openrouter" if get_ai("openrouter_api_key").present?
+    available << "requesty" if get_ai("requesty_api_key").present?
     available << "anthropic" if get_ai("anthropic_api_key").present?
     available << "gemini" if get_ai("gemini_api_key").present?
     available << "openai" if get_ai("openai_api_key").present?
@@ -631,7 +640,8 @@ class Config
     # We check for any AI-related key to determine if the section exists
     ai_keys = %w[ai_provider ai_model ollama_api_base ollama_model
                  openrouter_api_key openrouter_model anthropic_api_key anthropic_model
-                 gemini_api_key gemini_model openai_api_key openai_model]
+                 gemini_api_key gemini_model openai_api_key openai_model
+                 requesty_api_key requesty_model]
 
     ai_section_present = existing_lines.any? do |line|
       line.include?("# AI/LLM") ||

@@ -162,6 +162,7 @@ class AiService
         # Clear all keys first
         config.openai_api_key = nil
         config.openrouter_api_key = nil
+        config.requesty_api_key = nil
         config.anthropic_api_key = nil
         config.gemini_api_key = nil
         config.ollama_api_base = nil
@@ -180,6 +181,7 @@ class AiService
         # RubyLLM.configure is additive, so previous keys may persist
         config.openai_api_key = nil
         config.openrouter_api_key = nil
+        config.requesty_api_key = nil
         config.anthropic_api_key = nil
         config.gemini_api_key = nil
         config.ollama_api_base = nil
@@ -197,6 +199,8 @@ class AiService
           config.ollama_api_base = ollama_api_base
         when "openrouter"
           config.openrouter_api_key = cfg.get_ai("openrouter_api_key")
+        when "requesty"
+          config.requesty_api_key = cfg.get_ai("requesty_api_key")
         when "anthropic"
           config.anthropic_api_key = cfg.get_ai("anthropic_api_key")
         when "gemini"

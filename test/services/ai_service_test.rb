@@ -11,6 +11,7 @@ class AiServiceTest < ActiveSupport::TestCase
       OPENAI_API_KEY OPENROUTER_API_KEY ANTHROPIC_API_KEY
       GEMINI_API_KEY OLLAMA_API_BASE AI_PROVIDER AI_MODEL
       OPENAI_MODEL OPENROUTER_MODEL ANTHROPIC_MODEL GEMINI_MODEL OLLAMA_MODEL
+      REQUESTY_API_KEY REQUESTY_MODEL
       IMAGE_GENERATION_MODEL
     ].each do |key|
       @original_env[key] = ENV[key]
@@ -42,6 +43,11 @@ class AiServiceTest < ActiveSupport::TestCase
 
   test "enabled? returns true when OpenRouter key is set" do
     ENV["OPENROUTER_API_KEY"] = "sk-or-test-key"
+    assert AiService.enabled?
+  end
+
+  test "enabled? returns true when Requesty key is set" do
+    ENV["REQUESTY_API_KEY"] = "rqsty-test-key"
     assert AiService.enabled?
   end
 
@@ -84,6 +90,21 @@ class AiServiceTest < ActiveSupport::TestCase
     ENV["GEMINI_API_KEY"] = "gemini-test"
 
     assert_equal "openrouter", AiService.current_provider
+  end
+
+  test "current_provider does not pick requesty in auto mode" do
+    ENV["REQUESTY_API_KEY"] = "rqsty-test"
+    ENV["GEMINI_API_KEY"] = "gemini-test"
+
+    assert_equal "gemini", AiService.current_provider
+  end
+
+  test "current_provider returns requesty when selected" do
+    ENV["REQUESTY_API_KEY"] = "rqsty-test"
+    ENV["OPENAI_API_KEY"] = "sk-test"
+    ENV["AI_PROVIDER"] = "requesty"
+
+    assert_equal "requesty", AiService.current_provider
   end
 
   test "current_provider returns ollama over gemini" do
@@ -138,6 +159,12 @@ class AiServiceTest < ActiveSupport::TestCase
 
   test "current_model returns openrouter default model" do
     ENV["OPENROUTER_API_KEY"] = "sk-or-test"
+    assert_equal "openai/gpt-4o-mini", AiService.current_model
+  end
+
+  test "current_model returns requesty default model" do
+    ENV["REQUESTY_API_KEY"] = "rqsty-test"
+    ENV["AI_PROVIDER"] = "requesty"
     assert_equal "openai/gpt-4o-mini", AiService.current_model
   end
 
@@ -203,6 +230,7 @@ class AiServiceTest < ActiveSupport::TestCase
     assert_includes providers, "anthropic"
     assert_not_includes providers, "gemini"
     assert_not_includes providers, "openrouter"
+    assert_not_includes providers, "requesty"
   end
 
   # Image generation tests
@@ -333,6 +361,33 @@ class AiServiceTest < ActiveSupport::TestCase
 
     assert_equal "Fixed by Claude", result[:corrected]
     assert_equal "anthropic", result[:provider]
+  end
+
+  test "fix_grammar works with requesty provider" do
+    ENV["REQUESTY_API_KEY"] = "rqsty-test-key"
+    ENV["AI_PROVIDER"] = "requesty"
+
+    mock_response = stub(content: "Fixed via Requesty")
+    mock_chat = stub
+    mock_chat.stubs(:with_instructions).returns(mock_chat)
+    mock_chat.stubs(:ask).returns(mock_response)
+
+    RubyLLM.expects(:chat).with(model: "openai/gpt-4o-mini", provider: :requesty, assume_model_exists: false).returns(mock_chat)
+
+    result = AiService.fix_grammar("Input text")
+
+    assert_equal "Fixed via Requesty", result[:corrected]
+    assert_equal "requesty", result[:provider]
+    assert_equal "rqsty-test-key", RubyLLM.config.requesty_api_key
+  end
+
+  test "requesty provider targets the Requesty router" do
+    config = RubyLLM::Configuration.new
+    config.requesty_api_key = "rqsty-test-key"
+    provider = RubyLLM::Providers::Requesty.new(config)
+
+    assert_equal "https://router.requesty.ai/v1", provider.api_base
+    assert_equal "Bearer rqsty-test-key", provider.headers["Authorization"]
   end
 
   # === Image generation response parsing ===

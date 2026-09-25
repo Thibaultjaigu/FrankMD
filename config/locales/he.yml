@@ -396,6 +396,8 @@ he:
       ollama_description: "הפעל AI מקומית על המחשב שלך:"
       openrouter_title: "OpenRouter"
       openrouter_description: "גישה למספר ספקי AI:"
+      requesty_title: "Requesty"
+      requesty_description: "גישה למודלים רבים דרך API אחד:"
       anthropic_title: "Anthropic (Claude)"
       anthropic_description: "השתמש במודלי Claude:"
       gemini_title: "Google Gemini"

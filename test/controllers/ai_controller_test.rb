@@ -11,6 +11,7 @@ class AiControllerTest < ActionDispatch::IntegrationTest
       OPENAI_API_KEY OPENROUTER_API_KEY ANTHROPIC_API_KEY
       GEMINI_API_KEY OLLAMA_API_BASE AI_PROVIDER AI_MODEL
       OPENAI_MODEL OPENROUTER_MODEL ANTHROPIC_MODEL GEMINI_MODEL OLLAMA_MODEL
+      REQUESTY_API_KEY REQUESTY_MODEL
       IMAGE_GENERATION_MODEL
     ].each do |key|
       @original_env[key] = ENV[key]
@@ -64,6 +65,19 @@ class AiControllerTest < ActionDispatch::IntegrationTest
     data = JSON.parse(response.body)
     assert_equal true, data["enabled"]
     assert_equal "openrouter", data["provider"]
+    assert_equal "openai/gpt-4o-mini", data["model"]
+  end
+
+  test "config returns requesty when selected" do
+    ENV["REQUESTY_API_KEY"] = "rqsty-test-key"
+    ENV["AI_PROVIDER"] = "requesty"
+
+    get "/ai/config", as: :json
+    assert_response :success
+
+    data = JSON.parse(response.body)
+    assert_equal true, data["enabled"]
+    assert_equal "requesty", data["provider"]
     assert_equal "openai/gpt-4o-mini", data["model"]
   end
 

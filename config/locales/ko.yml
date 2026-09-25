@@ -399,6 +399,8 @@ ko:
       ollama_description: "로컬에서 AI 실행:"
       openrouter_title: "OpenRouter"
       openrouter_description: "여러 AI 제공자에 접근:"
+      requesty_title: "Requesty"
+      requesty_description: "하나의 API로 여러 모델에 접근:"
       anthropic_title: "Anthropic (Claude)"
       anthropic_description: "Claude 모델 사용:"
       gemini_title: "Google Gemini"

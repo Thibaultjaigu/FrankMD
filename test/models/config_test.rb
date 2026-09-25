@@ -52,6 +52,7 @@ class ConfigTest < ActiveSupport::TestCase
       OPENAI_API_KEY OPENROUTER_API_KEY ANTHROPIC_API_KEY
       GEMINI_API_KEY OLLAMA_API_BASE AI_PROVIDER AI_MODEL
       OPENAI_MODEL OPENROUTER_MODEL ANTHROPIC_MODEL GEMINI_MODEL OLLAMA_MODEL
+      REQUESTY_API_KEY REQUESTY_MODEL
     ]
   end
 
@@ -609,6 +610,18 @@ class ConfigTest < ActiveSupport::TestCase
     config = Config.new(base_path: @test_dir)
 
     assert_equal "openai", config.effective_ai_provider
+  end
+
+  test "effective_ai_provider uses requesty from file when selected" do
+    ENV["OPENAI_API_KEY"] = "sk-env-openai"
+
+    @test_dir.join(".fed").write("ai_provider = requesty\nrequesty_api_key = rqsty-file-key")
+    config = Config.new(base_path: @test_dir)
+
+    assert config.ai_configured_in_file?
+    assert_equal [ "requesty" ], config.ai_providers_available
+    assert_equal "requesty", config.effective_ai_provider
+    assert_equal "openai/gpt-4o-mini", config.effective_ai_model
   end
 
   test "effective_ai_provider ignores unavailable provider" do

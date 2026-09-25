@@ -410,6 +410,8 @@ en:
       ollama_description: "Run AI locally on your machine:"
       openrouter_title: "OpenRouter"
       openrouter_description: "Access multiple AI providers:"
+      requesty_title: "Requesty"
+      requesty_description: "Route to many models through one API:"
       anthropic_title: "Anthropic (Claude)"
       anthropic_description: "Use Claude models:"
       gemini_title: "Google Gemini"

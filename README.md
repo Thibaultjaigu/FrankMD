@@ -145,7 +145,7 @@
 - **Grammar Check**: AI-powered grammar, spelling, and typo correction
 - Side-by-side diff view with original and corrected text
 - Editable corrections before accepting changes
-- Supports Ollama (local), OpenAI, Anthropic, Gemini, and OpenRouter
+- Supports Ollama (local), OpenAI, Anthropic, Gemini, OpenRouter, and Requesty
 
 <p align="center">
   <img src="https://new-uploads-akitaonrails.s3.us-east-2.amazonaws.com/frankmd/2026/02/screenshot-2026-02-01_14-22-28.jpg" alt="AI grammar checker" width="700">
@@ -342,6 +342,8 @@ google_cse_id = your-cse-id
 # ollama_model = llama3.2:latest
 # openrouter_api_key = sk-or-...
 # openrouter_model = openai/gpt-4o-mini
+# requesty_api_key = rqsty-...
+# requesty_model = openai/gpt-4o-mini
 # anthropic_api_key = sk-ant-...
 # anthropic_model = claude-sonnet-4-20250514
 # gemini_api_key = ...
@@ -391,12 +393,14 @@ The `.fed` file appears in the explorer panel with a gear icon. You can click it
 | `youtube_api_key` | string | - | YouTube Data API key |
 | `google_api_key` | string | - | Google API key |
 | `google_cse_id` | string | - | Google Custom Search Engine ID |
-| `ai_provider` | string | auto | AI provider: auto, ollama, openrouter, anthropic, gemini, openai |
+| `ai_provider` | string | auto | AI provider: auto, ollama, openrouter, requesty, anthropic, gemini, openai |
 | `ai_model` | string | (per provider) | Override model for any provider |
 | `ollama_api_base` | string | - | Ollama API base URL (e.g., http://localhost:11434/v1) |
 | `ollama_model` | string | llama3.2:latest | Ollama model |
 | `openrouter_api_key` | string | - | OpenRouter API key |
 | `openrouter_model` | string | openai/gpt-4o-mini | OpenRouter model |
+| `requesty_api_key` | string | - | Requesty API key |
+| `requesty_model` | string | openai/gpt-4o-mini | Requesty model |
 | `anthropic_api_key` | string | - | Anthropic API key |
 | `anthropic_model` | string | claude-sonnet-4-20250514 | Anthropic model |
 | `gemini_api_key` | string | - | Google Gemini API key |
@@ -485,6 +489,8 @@ FrankMD has an AI grammar and spelling checker. Click the "AI" button in the edi
 4. **OpenRouter** - Multiple providers, pay-per-use
 5. **Ollama** - Local, free, private
 
+**Requesty** (LLM gateway) is also supported. It is never picked in auto mode, so set `ai_provider = requesty` to use it.
+
 When multiple providers are configured, FrankMD uses the first available one in the priority order above. You can override this with `ai_provider = <provider>`.
 
 #### Option 1: Ollama (Local, Free, Recommended)
@@ -553,6 +559,21 @@ openai_api_key = sk-...
 openai_model = gpt-4o-mini
 ```
 
+#### Option 6: Requesty
+
+Access many models through one OpenAI-compatible gateway:
+
+1. Get an API key from [app.requesty.ai](https://app.requesty.ai/api-keys)
+2. Configure in `.fed`:
+
+```ini
+ai_provider = requesty
+requesty_api_key = rqsty-...
+requesty_model = openai/gpt-4o-mini
+```
+
+Model ids use the `vendor/model` form (for example `anthropic/claude-sonnet-4-5`). See [docs.requesty.ai](https://docs.requesty.ai) for the model list.
+
 #### Provider Selection
 
 By default, FrankMD uses the first configured provider in priority order (OpenAI -> Anthropic -> Gemini -> OpenRouter -> Ollama). To force a specific provider:
@@ -592,6 +613,7 @@ This is useful for:
 |----------|---------------|
 | Ollama | llama3.2:latest |
 | OpenRouter | openai/gpt-4o-mini |
+| Requesty | openai/gpt-4o-mini |
 | Anthropic | claude-sonnet-4-20250514 |
 | Gemini | gemini-2.0-flash |
 | OpenAI | gpt-4o-mini |

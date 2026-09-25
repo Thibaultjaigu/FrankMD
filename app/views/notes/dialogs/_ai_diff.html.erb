@@ -55,6 +55,18 @@ ollama_model = llama3.2</pre>
 openrouter_model = openai/gpt-4o-mini</pre>
                 </div>
 
+                <!-- Requesty -->
+                <div class="bg-[var(--theme-bg-primary)] p-4 rounded border border-[var(--theme-border)]">
+                  <h4 class="font-semibold mb-2"><%= t('dialogs.ai_diff.requesty_title') %></h4>
+                  <p class="text-[var(--theme-text-muted)] text-xs mb-2"><%= t('dialogs.ai_diff.requesty_description') %></p>
+                  <ol class="list-decimal list-inside space-y-1 text-[var(--theme-text-muted)] text-xs">
+                    <li>Get key from <a href="https://app.requesty.ai/api-keys" target="_blank" class="text-[var(--theme-accent)] hover:underline">app.requesty.ai</a></li>
+                  </ol>
+                  <pre class="mt-2 bg-[var(--theme-code-bg)] p-2 rounded text-xs overflow-x-auto">ai_provider = requesty
+requesty_api_key = rqsty-...
+requesty_model = openai/gpt-4o-mini</pre>
+                </div>
+
                 <!-- Anthropic -->
                 <div class="bg-[var(--theme-bg-primary)] p-4 rounded border border-[var(--theme-border)]">
                   <h4 class="font-semibold mb-2"><%= t('dialogs.ai_diff.anthropic_title') %></h4>
